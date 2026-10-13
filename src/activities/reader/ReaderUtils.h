@@ -74,11 +74,12 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
-  const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
+  const int8_t remote = input.remotePageTurn();
+  const bool prev = tiltPrev || remote < 0 ||
+                    (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
+  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext || remote > 0 ||
                     pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
                     pageButtonTriggered(nextButton);
   return {prev, next, tiltPrev || tiltNext};

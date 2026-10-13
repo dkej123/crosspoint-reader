@@ -105,14 +105,31 @@ kolejce na SD (dostarczanie „co najmniej raz”).
 Kopie zapasowe w HA: `configuration.yaml.pre-xteink-20261013`,
 `automations.yaml.pre-xteink-20261013`, `secrets.yaml.pre-kosync-20261013`.
 
-### 4. Pilot BLE do kartkowania (w toku)
+### 4. Pilot BLE do kartkowania
 
-- SDK `freeink-sdk` ma gotowy host BLE HID (`BleKeyboardHost`) za flagą
-  `FREEINK_CAP_BLE_HID_HOST` — włączany tylko w env forka.
-- **Działa wyłącznie przy otwartej książce** i tylko gdy włączony jest
-  **przełącznik w ustawieniach**.
-- Tylko BLE (ESP32-S3 nie ma klasycznego Bluetooth) — piloty/gamepady BLE HID.
-- Inspiracja: fork CrumBLE (CrossInk) — tam ekran parowania i mapowanie klawiszy.
+- Host BLE HID z SDK (`BleKeyboardHost`, flaga `FREEINK_CAP_BLE_HID_HOST`) na
+  NimBLE-Arduino — włączony **tylko w env `x4pro-dkej`**; inne buildy mają
+  zaślepki (`src/ble/BleRemote.cpp`), więc kod upstreamu się nie zmienia.
+- **Settings → Controls → Bluetooth Remote** — przełącznik (domyślnie wyłączony).
+- **Settings → Controls → Pair Bluetooth Remote** — skan 10 s, lista urządzeń
+  (`[HID]` = reklamuje usługę HID), wybór = połączenie i bonding (ew. kod do
+  wpisania na pilocie). Adres zapisany w ustawieniach (`bleRemoteAddr`),
+  bond w NVS. „Zapomnij pilota” usuwa bond i wyłącza funkcję.
+- **Radio działa tylko przy otwartej książce** (`ReaderActivity::onEnter` →
+  start, `onExit`/uśpienie → stop) i tylko gdy przełącznik jest włączony i
+  pilot sparowany. Na ekranie parowania stos działa tylko na czas tego ekranu.
+- Mapowanie: PageDown / → / ↓ / Enter / spacja → następna strona;
+  PageUp / ← / ↑ / Backspace → poprzednia. Przyciski, których dekoder
+  klawiatury nie rozpoznaje (np. tanie piloty „TikTok” wysyłające głośność),
+  przewracają do przodu.
+- Wpięte w `ReaderUtils::detectPageTurn`, więc działa w EPUB, TXT i XTC i w
+  każdej orientacji (pion/poziom).
+- Tylko BLE (ESP32-S3 nie ma klasycznego Bluetooth).
+- Obejście linkera `_btLibraryInUse` (`src/ble/BtLibraryInUseShim.cpp`) z
+  upstream PR #3197 (`feat-ble`) — tego PR nie scalamy (1779 linii, 217 commitów
+  za `develop`, pisany pod pamięć X4).
+
+Ustawienia KOSync i teksty mają też polskie tłumaczenia (`polish.yaml`).
 
 ## Odrzucone pomysły (i dlaczego)
 

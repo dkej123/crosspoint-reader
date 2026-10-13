@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "AboutActivity.h"
+#include "BleRemoteActivity.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
@@ -35,6 +36,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/plugins/PluginCatalogActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "ble/BleRemote.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
@@ -77,6 +79,7 @@ void SettingsActivity::rebuildSettingsLists() {
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (BoardConfig::hasHomeKey() && setting.valuePtr == &CrossPointSettings::longPressMenuFunction) continue;
+      if (setting.valuePtr == &CrossPointSettings::bleRemoteEnabled && !bleremote::available()) continue;
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
@@ -91,6 +94,9 @@ void SettingsActivity::rebuildSettingsLists() {
   if (!BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  }
+  if (bleremote::available()) {
+    controlsSettings.push_back(SettingInfo::Action(StrId::STR_BLE_REMOTE_PAIR, SettingAction::BleRemote));
   }
   if (BoardConfig::hasHomeKey()) {
     controlsSettings.insert(controlsSettings.begin(),
@@ -367,6 +373,10 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: ClockSettingsActivity");
         }
+        break;
+      case SettingAction::BleRemote:
+        startActivityForResult(std::make_unique<BleRemoteActivity>(renderer, mappedInput),
+                               [this](const ActivityResult&) { requestUpdate(); });
         break;
       case SettingAction::KOReaderSync:
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);

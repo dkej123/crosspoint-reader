@@ -18,6 +18,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "XtcReaderActivity.h"
+#include "ble/BleRemote.h"
 #include "util/PluginEvents.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -58,6 +59,7 @@ void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+  bleremote::startForReader();  // no-op unless enabled + paired (fork)
 
   // Heap ledger for field crash reports: free vs largest block distinguishes a
   // leak (free falls) from fragmentation (free stable, largest collapses).
@@ -98,6 +100,7 @@ void ReaderActivity::rememberBookOnceRendered() {
 
 void ReaderActivity::onExit() {
   Activity::onExit();
+  bleremote::stop();
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {
@@ -125,7 +128,10 @@ void ReaderActivity::onExit() {
   endOfBookOptionsReady.store(false, std::memory_order_release);
 }
 
-void ReaderActivity::prepareForSleep() { flushReaderSession(); }
+void ReaderActivity::prepareForSleep() {
+  flushReaderSession();
+  bleremote::stop();
+}
 
 void ReaderActivity::flushReaderSession() {
   if (!readerSession.isEmitWorthy() || !pluginevents::anySubscriber(pluginevents::Event::ReaderSession)) {

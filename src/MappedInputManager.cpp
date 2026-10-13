@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "CrossPointSettings.h"
+#include "ble/BleRemote.h"
 #include "components/HeaderBackTapTarget.h"
 #include "components/UITheme.h"
 
@@ -17,6 +18,8 @@ namespace fui = freeink::ui;
 
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   gpio.update();
+  bleremote::poll();
+  remoteTurn = bleremote::takePageTurn();
   const bool pagePressed =
       SETTINGS.vibration == CrossPointSettings::VIBRATION_TOUCH_PAGE && gpio.wasCapacitivePagePressed();
   HalHaptics::feedback(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, pagePressed, SETTINGS.hapticIntensity);

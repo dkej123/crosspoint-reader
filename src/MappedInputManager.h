@@ -51,6 +51,8 @@ class MappedInputManager {
   void setPowerConfirmClickFrame(const bool clicked) { powerConfirmClickFrame = clicked; }
 #endif
   bool wasPressed(Button button) const;
+  // Fork: page turn from the BLE remote decoded this frame (+1 next, -1 prev, 0 none).
+  int8_t remotePageTurn() const { return remoteTurn; }
   bool wasReleased(Button button) const;
   // One-shot threshold event while the button is down; consumes its release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
@@ -151,6 +153,7 @@ class MappedInputManager {
 
   mutable HomeButtonInput homeButtonInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
+  mutable int8_t remoteTurn = 0;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;

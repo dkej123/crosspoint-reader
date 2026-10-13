@@ -429,6 +429,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                             "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
+        // Fork: hidden on builds without the BLE HID host (see SettingsActivity).
+        SettingInfo::Toggle(StrId::STR_BLE_REMOTE, &CrossPointSettings::bleRemoteEnabled, "bleRemoteEnabled",
+                            StrId::STR_CAT_CONTROLS),
 
         // --- System ---
         SettingInfo::Value(
@@ -448,6 +451,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // is hidden from the on-device Settings screen (edited via OPDS UI).
         SettingInfo::String(StrId::STR_OPDS_DOWNLOAD_FOLDER, &SETTINGS.opdsDownloadFolder[0],
                             sizeof(SETTINGS.opdsDownloadFolder), "opdsDownloadFolder"),
+        // Paired BLE remote address: persisted, category-less (set by the pairing screen).
+        SettingInfo::String(StrId::STR_BLE_REMOTE, &SETTINGS.bleRemoteAddr[0], sizeof(SETTINGS.bleRemoteAddr),
+                            "bleRemoteAddr"),
         // OPDS download filename format: persisted + web-exposed, category-less so it
         // is hidden from the on-device Settings screen (cycled from the OPDS UI).
         SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,

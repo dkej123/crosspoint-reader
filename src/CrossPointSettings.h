@@ -339,6 +339,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char sdFontFamilyName[32] = "";
   // Dictionary folder name under /dictionaries (empty = no dictionary)
   char dictionaryName[32] = "";
+  char bleRemoteAddr[18] = "";
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Show the title and author read from inside each book rather than its
@@ -350,6 +351,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t moveFinishedToReadFolder = 0;
   // Short press Back goes to file browser instead of home (0 = disabled, 1 = enabled)
   uint8_t backShortToFileBrowser = 0;
+  // Fork: BLE page-turner remote (reader only); address of the paired remote.
+  uint8_t bleRemoteEnabled = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
