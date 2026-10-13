@@ -4,6 +4,7 @@
 #include <HttpHeader.h>
 #include <I18n.h>
 
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -31,21 +32,23 @@ constexpr int IDX_AUTOMATIC_CHECK = 10;
 constexpr int IDX_AUTOMATIC_UPLOAD = 11;
 constexpr int IDX_SIGN_UP = 12;
 constexpr int IDX_AUTHENTICATE = 13;
+static_assert(IDX_AUTHENTICATE == KOReaderSettingsActivity::MENU_ITEMS - 1, "every KOSync menu row needs an index");
 
-constexpr StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {StrId::STR_USERNAME,
-                                                                   StrId::STR_PASSWORD,
-                                                                   StrId::STR_SYNC_SERVER_URL,
-                                                                   StrId::STR_SERVER_TYPE,
-                                                                   StrId::STR_CUSTOM_HEADER_1,
-                                                                   StrId::STR_CUSTOM_HEADER_2,
-                                                                   StrId::STR_DOCUMENT_MATCHING,
-                                                                   StrId::STR_SEND_METADATA,
-                                                                   StrId::STR_SYNC_BEHAVIOR,
-                                                                   StrId::STR_SYNC_CLIPPINGS,
-                                                                   StrId::STR_AUTOMATIC_PROGRESS_CHECK,
-                                                                   StrId::STR_AUTOMATIC_PROGRESS_UPLOAD,
-                                                                   StrId::STR_SIGN_UP,
-                                                                   StrId::STR_AUTHENTICATE};
+constexpr StrId menuNames[] = {StrId::STR_USERNAME,
+                               StrId::STR_PASSWORD,
+                               StrId::STR_SYNC_SERVER_URL,
+                               StrId::STR_SERVER_TYPE,
+                               StrId::STR_CUSTOM_HEADER_1,
+                               StrId::STR_CUSTOM_HEADER_2,
+                               StrId::STR_DOCUMENT_MATCHING,
+                               StrId::STR_SEND_METADATA,
+                               StrId::STR_SYNC_BEHAVIOR,
+                               StrId::STR_SYNC_CLIPPINGS,
+                               StrId::STR_AUTOMATIC_PROGRESS_CHECK,
+                               StrId::STR_AUTOMATIC_PROGRESS_UPLOAD,
+                               StrId::STR_SIGN_UP,
+                               StrId::STR_AUTHENTICATE};
+static_assert(std::size(menuNames) == KOReaderSettingsActivity::MENU_ITEMS, "one label per KOSync menu row");
 
 constexpr int SERVER_TYPE_ITEMS = 3;
 constexpr StrId serverTypeNames[SERVER_TYPE_ITEMS] = {StrId::STR_CROSSPOINT, StrId::STR_KOSYNC_SERVER,

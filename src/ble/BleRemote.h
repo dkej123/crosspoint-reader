@@ -28,4 +28,8 @@ void poll();
 // Page turn decoded during the last poll(): +1 next, -1 previous, 0 none.
 int8_t takePageTurn();
 
+// Blocking, bounded teardown right before deep sleep (no later frames will
+// poll). Returns true when the stack is fully down.
+bool shutdownForSleep();
+
 }  // namespace bleremote

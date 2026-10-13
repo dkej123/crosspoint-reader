@@ -88,3 +88,9 @@ add_subdirectory(protected_paths)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME TrustedTimeTimezone COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_trusted_time.py)
+
+# dkej123 fork
+add_subdirectory(ble_remote)
+add_subdirectory(ota_version)
+add_subdirectory(sleep_frame_policy)
+add_subdirectory(ha_plugin_manifest)

@@ -13,6 +13,7 @@
 
 #include "PluginHttp.h"
 #include "PluginLocations.h"
+#include "PluginTemplate.h"
 #include "components/UITheme.h"
 #include "network/ProtectedPaths.h"
 
@@ -271,11 +272,11 @@ std::string drainSubstituted(std::string tpl, const std::string& token, const pl
   for (const auto& kv : meta) pluginhttp::substituteAll(tpl, kv.first.c_str(), kv.second);
   char tsBuf[16];
   snprintf(tsBuf, sizeof(tsBuf), "%lld", ts);
-  pluginhttp::substituteAll(tpl, "{event.ts}", tsBuf);
-  pluginhttp::substituteAll(tpl, "{event.id}", id);
+  plugintemplate::substituteVar(tpl, "event.ts", tsBuf);
+  plugintemplate::substituteVar(tpl, "event.id", id);
   for (JsonPairConst kv : vars.as<JsonObjectConst>()) {
-    pluginhttp::substituteAll(tpl, (std::string("{event.") + kv.key().c_str() + "}").c_str(),
-                              pluginhttp::variantToString(kv.value()));
+    plugintemplate::substituteVar(tpl, std::string("event.") + kv.key().c_str(),
+                                  pluginhttp::variantToString(kv.value()));
   }
   return tpl;
 }

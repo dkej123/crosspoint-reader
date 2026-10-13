@@ -134,9 +134,9 @@ void BleRemoteActivity::activateIndex(const int index) {
   if (dev < 0 || dev >= BleHid.deviceCount() || !connectingAddr_.empty()) return;
   const auto& d = BleHid.device(static_cast<uint8_t>(dev));
   BleHid.stopScan();
-  connectingAddr_ = d.addr;
+  connectingAddr_.assign(d.addr, strnlen(d.addr, sizeof(d.addr)));
   status_ = std::string(tr(STR_BLE_REMOTE_CONNECTING)) + "...";
-  if (!BleHid.connect(d.addr)) {
+  if (!BleHid.connect(connectingAddr_.c_str())) {
     status_ = tr(STR_BLE_REMOTE_FAILED);
     connectingAddr_.clear();
   }
@@ -159,12 +159,15 @@ void BleRemoteActivity::buildScreen(UiScreen& screen) {
   rowValues_[IDX_FORGET] = SETTINGS.bleRemoteAddr[0] ? SETTINGS.bleRemoteAddr : tr(STR_NOT_SET);
 #if FREEINK_CAP_BLE_HID_HOST
   for (int i = FIXED_ROWS; i < count; i++) {
+    // The scan task may update an entry while we read it: copy bounded.
     const auto& d = BleHid.device(static_cast<uint8_t>(i - FIXED_ROWS));
-    rowLabels_[i] = (d.name[0] ? d.name : d.addr);
+    rowLabels_[i] = d.name[0] ? std::string(d.name, strnlen(d.name, sizeof(d.name)))
+                              : std::string(d.addr, strnlen(d.addr, sizeof(d.addr)));
     if (d.hid) rowLabels_[i] += " [HID]";
     char rssi[12];
     snprintf(rssi, sizeof(rssi), "%d dBm", d.rssi);
-    rowValues_[i] = std::strcmp(d.addr, SETTINGS.bleRemoteAddr) == 0 ? std::string("* ") + rssi : rssi;
+    const bool current = std::strncmp(d.addr, SETTINGS.bleRemoteAddr, sizeof(d.addr)) == 0;
+    rowValues_[i] = current ? std::string("* ") + rssi : rssi;
   }
 #endif
   for (int i = 0; i < count; i++) {

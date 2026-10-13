@@ -32,10 +32,12 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "SleepFramePolicy.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#include "ble/BleRemote.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
@@ -369,15 +371,21 @@ static void commitDeepSleep(const bool fromTimeout, const bool renderScreen) {
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout, renderScreen);
 
-  if (renderScreen &&
-      (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-       (fromTimeout && SETTINGS.quickResumeSleepScreen ==
-                           CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT))) {
+  // A deferred sleep (renderScreen false) already rendered and saved its frame.
+  const bool quickResume =
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
+      (fromTimeout &&
+       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  const SleepFrameAction frame = sleepFrameAction(quickResume, /*frameAlreadySaved=*/!renderScreen);
+  if (frame.saveFrame) {
     saveSleepFrameBuffer();
-  } else if (Storage.exists(SLEEP_FRAME_FILE)) {
+  } else if (frame.removeStale && Storage.exists(SLEEP_FRAME_FILE)) {
     // A stale Quick Resume frame must not replace the selected sleep screen during wake.
     Storage.remove(SLEEP_FRAME_FILE);
   }
+
+  // No later loop frame will poll the BLE remote; bring NimBLE down now.
+  bleremote::shutdownForSleep();
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
   // Wake from deep sleep is effectively a chip reset, so no state needs to survive.

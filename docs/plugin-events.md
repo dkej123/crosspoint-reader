@@ -183,6 +183,11 @@ Templates in `url`, `headers`, `body`, `dest`, and `toast` substitute:
 Unmatched variables substitute as nothing was replaced (the literal `{...}`
 text is sent), so servers should tolerate or reject malformed values.
 
+`{event.NAME|json}` (fork addition) inserts the event value escaped for a JSON
+string literal — quotes, backslashes and control characters — so a body like
+`{"book":"{event.book|json}"}` stays valid JSON for any book path. Use it for
+every free-text value placed inside a JSON string.
+
 ## The book metadata sidecar
 
 Convention: a flat JSON file next to the book, `<book path>.meta.json`:
