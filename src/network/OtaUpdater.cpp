@@ -18,8 +18,14 @@
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
 
+// GitHub "owner/repo" whose latest release this firmware updates from. Forks
+// that publish their own builds override it so OTA never swaps in upstream.
+#ifndef CROSSPOINT_OTA_REPO
+#define CROSSPOINT_OTA_REPO "crosspoint-reader/crosspoint-reader"
+#endif
+
 namespace {
-constexpr char latestReleaseUrl[] = "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest";
+constexpr char latestReleaseUrl[] = "https://api.github.com/repos/" CROSSPOINT_OTA_REPO "/releases/latest";
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
@@ -96,14 +102,15 @@ bool OtaUpdater::isUpdateNewer() const {
     return false;
   }
 
-  int currentMajor, currentMinor, currentPatch;
-  int latestMajor, latestMinor, latestPatch;
+  int currentMajor = 0, currentMinor = 0, currentPatch = 0, currentBuild = 0;
+  int latestMajor = 0, latestMinor = 0, latestPatch = 0, latestBuild = 0;
 
   const auto currentVersion = CROSSPOINT_VERSION;
 
-  // semantic version check (only match on 3 segments)
-  sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch);
-  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
+  // Semantic version check on 3 segments, plus an optional 4th fork build
+  // number (1.6.5.2 > 1.6.5.1 > 1.6.5); a missing or non-numeric 4th is 0.
+  sscanf(latestVersion.c_str(), "%d.%d.%d.%d", &latestMajor, &latestMinor, &latestPatch, &latestBuild);
+  sscanf(currentVersion, "%d.%d.%d.%d", &currentMajor, &currentMinor, &currentPatch, &currentBuild);
 
   /*
    * Compare major versions.
@@ -123,6 +130,8 @@ bool OtaUpdater::isUpdateNewer() const {
    * Check patch versions.
    */
   if (latestPatch != currentPatch) return latestPatch > currentPatch;
+
+  if (latestBuild != currentBuild) return latestBuild > currentBuild;
 
   // If we reach here, it means all segments are equal.
   // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
