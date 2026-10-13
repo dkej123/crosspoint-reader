@@ -5,8 +5,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 
+#include "AutomaticProgressCheckJob.h"
 #include "KOReaderSyncClient.h"
 
 /**
@@ -17,6 +19,11 @@
  * position mapping and the prompt decision stay on the main loop, where the
  * reader owns the Epub and the renderer, so there is no shared-state race with
  * the render task.
+ *
+ * The task is never killed: it shares an AutomaticProgressCheckJob with this
+ * object and finishes on its own. Destroying this object (leaving the reader,
+ * sleeping) abandons the job, after which the task makes no further WiFi
+ * changes and its result is dropped.
  */
 class AutomaticProgressCheck {
  public:
@@ -29,12 +36,12 @@ class AutomaticProgressCheck {
   };
 
   AutomaticProgressCheck() = default;
-  ~AutomaticProgressCheck();
+  ~AutomaticProgressCheck() { abandon(); }
 
   AutomaticProgressCheck(const AutomaticProgressCheck&) = delete;
   AutomaticProgressCheck& operator=(const AutomaticProgressCheck&) = delete;
 
-  bool isRunning() const { return status_.load(std::memory_order_acquire) == Status::RUNNING; }
+  bool isRunning() const { return status() == Status::RUNNING; }
 
   /**
    * Spawns the background fetch for @p epubPath. Returns false when a check is
@@ -43,23 +50,21 @@ class AutomaticProgressCheck {
   bool start(const std::string& epubPath);
 
   /** Non-blocking status poll for the main loop. */
-  Status status() const { return status_.load(std::memory_order_acquire); }
+  Status status() const;
 
   /** Completed remote progress; valid only when status() == DONE_OK. */
-  const KOReaderProgress& remoteProgress() const { return remoteProgress_; }
+  const KOReaderProgress& remoteProgress() const;
 
-  KOReaderSyncClient::Error error() const { return error_; }
+  KOReaderSyncClient::Error error() const;
 
   /** Returns the device to IDLE (call after consuming a result). */
-  void reset() { status_.store(Status::IDLE, std::memory_order_release); }
+  void reset() { abandon(); }
+
+  /** Stop caring about a running check; it winds down on its own. */
+  void abandon();
 
  private:
   static void taskTrampoline(void* arg);
-  void run();
 
-  TaskHandle_t taskHandle_ = nullptr;
-  std::atomic<Status> status_{Status::IDLE};
-  std::string epubPath_;
-  KOReaderProgress remoteProgress_;
-  KOReaderSyncClient::Error error_ = KOReaderSyncClient::OK;
+  std::shared_ptr<AutomaticProgressCheckJob> job_;
 };

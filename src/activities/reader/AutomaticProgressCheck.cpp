@@ -16,8 +16,9 @@ namespace {
 
 // Headless, bounded WiFi connect: try each saved credential once, then give up.
 // Mirrors WifiSelectionActivity's auto-connect path but blocks (this runs in a
-// dedicated task, not the activity loop).
-bool connectHeadless() {
+// dedicated task, not the activity loop). Bails out without touching the radio
+// further once the job is abandoned.
+bool connectHeadless(const std::atomic<bool>& abandoned) {
   if (WiFi.status() == WL_CONNECTED) return true;
 
   const uint32_t deadline = millis() + AutomaticWifiConnectionPolicy::BACKGROUND_TIMEOUT_MS;
@@ -28,6 +29,7 @@ bool connectHeadless() {
   vTaskDelay(pdMS_TO_TICKS(100));
 
   for (size_t i = 0; i < WIFI_STORE.getCredentialCount(); i++) {
+    if (abandoned.load(std::memory_order_acquire)) return false;
     const auto cred = WIFI_STORE.getCredentialAt(i);
     if (!cred) continue;
 
@@ -49,6 +51,7 @@ bool connectHeadless() {
         LOG_DBG("KOSync", "Automatic check: connected to %s", cred->ssid.c_str());
         return true;
       }
+      if (abandoned.load(std::memory_order_acquire)) return false;
       vTaskDelay(pdMS_TO_TICKS(100));
     }
     WiFi.disconnect();
@@ -56,77 +59,90 @@ bool connectHeadless() {
   return WiFi.status() == WL_CONNECTED;
 }
 
+struct DeviceSteps {
+  bool connect(const std::atomic<bool>& abandoned) {
+    // Load saved WiFi credentials from SD before the headless connect attempt.
+    // (WifiSelectionActivity does this in onEnter(); a background check runs
+    // without that activity, so it must load them itself.)
+    WIFI_STORE.loadFromFile();
+    const bool ok = connectHeadless(abandoned);
+    if (!ok) LOG_DBG("KOSync", "Automatic check: WiFi unavailable or abandoned");
+    return ok;
+  }
+  std::string documentHash(const std::string& epubPath) {
+    const std::string hash = KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME
+                                 ? KOReaderDocumentId::calculateFromFilename(epubPath)
+                                 : KOReaderDocumentId::calculate(epubPath);
+    if (hash.empty()) LOG_ERR("KOSync", "Automatic check: document hash failed");
+    return hash;
+  }
+  KOReaderSyncClient::Error fetch(const std::string& hash, KOReaderProgress& out) {
+    const auto result = KOReaderSyncClient::getProgress(hash, out);
+    if (result != KOReaderSyncClient::OK && result != KOReaderSyncClient::NOT_FOUND) {
+      LOG_DBG("KOSync", "Automatic check: getProgress failed (%d)", static_cast<int>(result));
+    }
+    return result;
+  }
+  // Drop the radio; the reader resumes normal low-power operation.
+  void releaseRadio() { WiFi.disconnect(true, false); }
+};
+
 }  // namespace
 
-AutomaticProgressCheck::~AutomaticProgressCheck() {
-  if (taskHandle_ && status_.load(std::memory_order_acquire) == Status::RUNNING) {
-    vTaskDelete(taskHandle_);
-  }
-  taskHandle_ = nullptr;
+void AutomaticProgressCheck::abandon() {
+  if (job_) job_->abandoned.store(true, std::memory_order_release);
+  job_.reset();
 }
+
+AutomaticProgressCheck::Status AutomaticProgressCheck::status() const {
+  if (!job_) return Status::IDLE;
+  switch (job_->status.load(std::memory_order_acquire)) {
+    case AutomaticProgressCheckJob::Status::RUNNING:
+      return Status::RUNNING;
+    case AutomaticProgressCheckJob::Status::DONE_OK:
+      return Status::DONE_OK;
+    case AutomaticProgressCheckJob::Status::DONE_NOT_FOUND:
+      return Status::DONE_NOT_FOUND;
+    case AutomaticProgressCheckJob::Status::DONE_ERROR:
+      break;
+  }
+  return Status::DONE_ERROR;
+}
+
+const KOReaderProgress& AutomaticProgressCheck::remoteProgress() const {
+  static const KOReaderProgress kEmpty{};
+  // Only read after status() reported DONE_OK (acquire), when the task is done writing.
+  return job_ ? job_->remoteProgress : kEmpty;
+}
+
+KOReaderSyncClient::Error AutomaticProgressCheck::error() const { return job_ ? job_->error : KOReaderSyncClient::OK; }
 
 bool AutomaticProgressCheck::start(const std::string& epubPath) {
   if (isRunning()) return false;
   if (!KOREADER_STORE.hasCredentials()) return false;
 
-  epubPath_ = epubPath;
-  remoteProgress_ = {};
-  error_ = KOReaderSyncClient::OK;
-  status_.store(Status::RUNNING, std::memory_order_release);
+  auto job = std::make_shared<AutomaticProgressCheckJob>();
+  job->epubPath = epubPath;
+  // The task holds its own reference so the job outlives this object if the
+  // reader is destroyed while the fetch is still in flight.
+  auto* taskRef = new (std::nothrow) std::shared_ptr<AutomaticProgressCheckJob>(job);
+  if (!taskRef) return false;
 
-  if (xTaskCreatePinnedToCore(&taskTrampoline, "AutoProgressCheck", 8192, this, 1, &taskHandle_, 0) != pdPASS) {
+  if (xTaskCreatePinnedToCore(&taskTrampoline, "AutoProgressCheck", 8192, taskRef, 1, nullptr, 0) != pdPASS) {
     LOG_ERR("KOSync", "Failed to create automatic progress check task");
-    status_.store(Status::DONE_ERROR, std::memory_order_release);
-    error_ = KOReaderSyncClient::NETWORK_ERROR;
-    taskHandle_ = nullptr;
+    delete taskRef;
     return false;
   }
+  job_ = std::move(job);
   return true;
 }
 
 void AutomaticProgressCheck::taskTrampoline(void* arg) {
-  auto* self = static_cast<AutomaticProgressCheck*>(arg);
-  self->run();
-  vTaskDelete(nullptr);  // never touches self after this point
-}
-
-void AutomaticProgressCheck::run() {
-  // Load saved WiFi credentials from SD before the headless connect attempt.
-  // (WifiSelectionActivity does this in onEnter(); a background check runs
-  // without that activity, so it must load them itself.)
-  WIFI_STORE.loadFromFile();
-
-  if (!connectHeadless()) {
-    LOG_DBG("KOSync", "Automatic check: WiFi unavailable");
-    error_ = KOReaderSyncClient::NETWORK_ERROR;
-    status_.store(Status::DONE_ERROR, std::memory_order_release);
-    return;
+  auto* ref = static_cast<std::shared_ptr<AutomaticProgressCheckJob>*>(arg);
+  {
+    DeviceSteps steps;
+    runAutomaticProgressCheck(**ref, steps);
   }
-
-  const std::string hash = KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME
-                               ? KOReaderDocumentId::calculateFromFilename(epubPath_)
-                               : KOReaderDocumentId::calculate(epubPath_);
-  if (hash.empty()) {
-    LOG_ERR("KOSync", "Automatic check: document hash failed");
-    error_ = KOReaderSyncClient::NETWORK_ERROR;
-    status_.store(Status::DONE_ERROR, std::memory_order_release);
-    return;
-  }
-
-  KOReaderProgress progress;
-  const auto result = KOReaderSyncClient::getProgress(hash, progress);
-  error_ = result;
-
-  // Drop the radio; the reader resumes normal low-power operation.
-  WiFi.disconnect(true, false);
-
-  if (result == KOReaderSyncClient::OK) {
-    remoteProgress_ = std::move(progress);
-    status_.store(Status::DONE_OK, std::memory_order_release);
-  } else if (result == KOReaderSyncClient::NOT_FOUND) {
-    status_.store(Status::DONE_NOT_FOUND, std::memory_order_release);
-  } else {
-    LOG_DBG("KOSync", "Automatic check: getProgress failed (%d)", static_cast<int>(result));
-    status_.store(Status::DONE_ERROR, std::memory_order_release);
-  }
+  delete ref;            // may free the job if the reader already let go
+  vTaskDelete(nullptr);  // never touches the job after this point
 }
