@@ -91,19 +91,69 @@ Przy uśpieniu kolejność jest: wysłanie pozycji do kosync → zdarzenia do HA
 sen. Wi-Fi tylko gdy bateria ≥ 20%, join max 10 s; nieudane zdarzenia czekają w
 kolejce na SD (dostarczanie „co najmniej raz”).
 
-**W Home Assistant** (`/config`, poza tym repo):
-- `configuration.yaml` → `template:` blok z webhookiem (`local_only`) i
-  sensorami `sensor.xteink_ksiazka`, `sensor.xteink_postep`,
-  `sensor.xteink_czas_czytania_dzis` (deduplikacja sesji po `event.id`),
-- `configuration.yaml` → `rest_command.kosync_get_progress` (GET
-  `/syncs/progress/<hash>` z `!secret kosync_user` / `kosync_key`),
-- `secrets.yaml` → `kosync_user`, `kosync_key` (= MD5 hasła),
-- `automations.yaml` → **„Xteink – potwierdzenie synchronizacji (push na
-  Pixel)”**: po każdej sesji czyta pozycję z kosync i wysyła na Pixela
-  ✅ zsynchronizowane / ℹ️ na serwerze dalej / ⚠️ nie dotarło.
+Wartości tekstowe w treści żądań używają filtra `{event.NAME|json}` (dodatek
+forka w `src/util/PluginTemplate.h`), więc JSON jest poprawny dla każdej nazwy
+pliku (cudzysłowy, backslashe, polskie znaki).
 
-Kopie zapasowe w HA: `configuration.yaml.pre-xteink-20261013`,
-`automations.yaml.pre-xteink-20261013`, `secrets.yaml.pre-kosync-20261013`.
+### 3a. Konfiguracja Home Assistant (statystyki czytania)
+
+Wszystko w `/config` na HA (poza tym repo). Kopie robocze, skrypty importu i
+testów: `~/Workspace/CrossPoint/ha-xteink/` (zawierają webhook ID — lokalnie,
+nie commitować).
+
+**`configuration.yaml` → `template:`**
+- Blok z wyzwalaczem `webhook` (`local_only: true`, tylko POST) — webhook ID
+  jest sekretem (w `config.json` na karcie SD i w HA).
+- `sensor.xteink_statystyki` — jedno źródło prawdy; stan = minuty łącznie,
+  atrybuty: `laczny_czas_s`, `sesje`, `pory_dnia_s` [rano 5–12, popołudnie
+  12–17, wieczór 17–21, noc 21–5], `dni_tygodnia_s` [pon..nd], `dni_czytania`
+  (180 dni), `dni_czytania_lacznie`, `dzienne_s` (35 dni), `seria_najdluzsza`,
+  `ksiazki` {hash KOReader → tytul, plik, czas_s, sesje, start, postep,
+  ukonczona, ostatnio}, `biezaca_ksiazka`, `ostatnia_sesja`, `ostatnie_sesje`
+  (50), `przetworzone_id` (200, deduplikacja), `import_crossink`.
+  - sesje dzielone między pory dnia / dni tygodnia / dni kalendarzowe według
+    rzeczywistego czasu startu i końca (jak w CrossInk), także przez północ;
+  - zdarzenia spóźnione liczone do dnia sesji, nie dostarczenia;
+  - `sleep.enter` z prawdziwym procentem aktualizuje postęp książki;
+  - limit rozmiaru atrybutów (przycinanie przy > 14 KB).
+- Sensory pochodne: `sensor.xteink_czas_laczny` (h, `total_increasing` →
+  długoterminowe statystyki), `_sesje`, `_seria_biezaca`, `_seria_najdluzsza`,
+  `_srednia_sesja`, `_czas_czytania_dzis`, `_ksiazka`, `_postep`,
+  `_tempo_czytania` (%/h), `_szacowany_czas_do_konca`.
+
+**`configuration.yaml` → `utility_meter:`** — `xteink_czytanie_dzien /
+_tydzien / _miesiac` na `sensor.xteink_czas_laczny` (wymaga restartu HA).
+
+**`configuration.yaml` → `rest_command.kosync_get_progress`** — GET
+`https://kosync.haosdk.pl/syncs/progress/<hash>` z nagłówkami KOReadera i
+`!secret kosync_user` / `!secret kosync_key` (= MD5 hasła) — wymaga restartu.
+
+**`automations.yaml`**
+- „Xteink – potwierdzenie synchronizacji (push na Pixel)” — po nowej,
+  najnowszej sesji odczytuje pozycję z kosync i wysyła na
+  `notify.mobile_app_pixel_9`: ✅ zsynchronizowane / ℹ️ na serwerze dalej
+  (nie nadpisano) / ⚠️ nie dotarło.
+- „Xteink – sesja czytania w dzienniku” — wpis do logbooka, np.
+  „Zmiana: 25 min, 31% → 34%” (spóźnione: „sesja z RRRR-MM-DD, dosłana później”).
+
+**Dashboard** „Przegląd” (`lovelace`) → widok **Czytanie** (`/lovelace/czytanie`):
+kafelki, wykres dzienny czasu czytania, kalendarz 5 tygodni, tabele pór dnia i
+dni tygodnia, książki, ostatnie sesje, logbook.
+
+**Import z CrossInk** (13.10.2026, jednorazowe zdarzenie `import.crossink`,
+idempotentne): 608 min / 44 sesje, pory dnia i dni tygodnia z
+`global_stats.bin`, 18 dni czytania, seria 15; książki kluczowane hashem
+KOReadera (partial MD5): Silos `cc8ddeaee04f07c4541e97bb9ee19a6a` (ukończona
+5.10), Zmiana `2526d505af62cf9a8e8df4a3a080c999` (23,1%). Przybliżone czasy
+dzienne z kopii zapasowych CrossInk celowo pominięte. Pełna kopia karty SD z
+CrossInk: `~/Workspace/CrossPoint/backup-crossink-2026-10-13/` (zawiera hasła —
+nie commitować).
+
+Kopie konfiguracji HA: `configuration.yaml.pre-xteink-20261013`,
+`configuration.yaml.pre-xteink-stats-20261013`,
+`automations.yaml.pre-xteink-20261013`,
+`automations.yaml.pre-xteink-stats-20261013`,
+`secrets.yaml.pre-kosync-20261013`.
 
 ### 4. Pilot BLE do kartkowania
 
@@ -130,6 +180,32 @@ Kopie zapasowe w HA: `configuration.yaml.pre-xteink-20261013`,
   za `develop`, pisany pod pamięć X4).
 
 Ustawienia KOSync i teksty mają też polskie tłumaczenia (`polish.yaml`).
+
+## Przegląd i testy
+
+Błędy znalezione w przeglądzie (poprawione):
+- **Quick Resume po odroczonym śnie** (z PR #2760) — zapisana klatka ekranu
+  była od razu kasowana → `SleepFramePolicy.h`.
+- **Zadanie automatycznego sprawdzania zabijane `vTaskDelete`** (z PR #2760)
+  przy wyjściu z książki/uśpieniu — mogło zostawić zajęte blokady Wi-Fi/TLS/SD
+  i ścigało się z samousunięciem zadania. Teraz zadanie współdzieli
+  `AutomaticProgressCheckJob` i jest tylko porzucane; porzucone nie rusza już
+  Wi-Fi.
+- **NimBLE włączony w chwili głębokiego snu** — blokujące, ograniczone
+  `bleremote::shutdownForSleep()` w `commitDeepSleep`.
+- **Podwójne kartkowanie** — klawisz i surowe zdarzenie z tego samego
+  naciśnięcia w różnych klatkach.
+- **Niepoprawny JSON we wtyczce** przy nazwie pliku z cudzysłowem — filtr `|json`.
+
+Testy (GoogleTest, `test/`, pisane z wymagań, nie z kodu): `ble_remote`,
+`ota_version`, `sleep_frame_policy`, `ha_plugin_manifest` (prawdziwy
+`device.json`, ArduinoJson 7.4.2 jak w firmware), `automatic_check_abandon`.
+Każdy poprawiony błąd został celowo przywrócony, by potwierdzić, że test go
+wykrywa. Całość: **600/600**.
+
+```bash
+cmake -S test -B build/test && cmake --build build/test -j && ctest --test-dir build/test
+```
 
 ## Odrzucone pomysły (i dlaczego)
 
