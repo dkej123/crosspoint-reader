@@ -26,6 +26,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "DeepSleep.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -164,6 +165,9 @@ enum class BootResume : uint8_t {
 // device back up against the user's sleep gesture. Never cleared:
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
+static bool deferredSleepPending = false;
+static bool deferredSleepCompletionRequested = false;
+static bool deferredSleepFromTimeout = false;
 
 // A silent restart is internal maintenance, so the light must come back exactly
 // as the user left it. SETTINGS.frontlightOn is the saved preference and
@@ -277,25 +281,25 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
-// Plugin-event delivery on the way into deep sleep. sleep.enter is delivered
-// now — over the live connection, or by bringing WiFi up when a plugin
-// subscribes (e.g. fetching a fresh /sleep.bmp so THIS sleep shows it — the
-// drain runs before goToSleep() renders the sleep screen). The connect path
-// is bounded (join deadline + drain event budget), skipped on low battery,
-// and sleep is never blocked on the network: a failed join or delivery just
-// sleeps with the previous image and the queued events retry on the next
-// drain (at-least-once). The caller's WiFi shutdown tears the radio down
-// either way. Deferrable events already queued (reader.exit) ride along in
-// the same drain.
-static void deliverSleepPluginEvents() {
-  // Activity-owned state must be queued before sleep.enter and before this
+// Plugin events on the way into deep sleep, split in two so automatic progress
+// upload (which defers sleep while it runs) can sit between them:
+//
+// queueSleepPluginEvents() runs while the reader is still alive: it flushes the
+// activity-owned reader.session and emits sleep.enter with the open book and
+// progress (the reader's own reader.exit only fires later, inside goToSleep()).
+//
+// drainSleepPluginEvents() delivers the queue — over the live connection, or by
+// bringing WiFi up when a plugin subscribes. The connect path is bounded (join
+// deadline + drain event budget), skipped on low battery, and sleep is never
+// blocked on the network: a failed join or delivery just sleeps and the queued
+// events retry on the next drain (at-least-once). The caller's WiFi shutdown
+// tears the radio down either way. With showUi false (the sleep screen is
+// already on the panel after a deferred sync) nothing is drawn.
+static void queueSleepPluginEvents() {
+  // Activity-owned state must be queued before sleep.enter and before the
   // same-sleep drain. The hook is idempotent with ordinary activity teardown.
   activityManager.prepareForSleep();
 
-  // Sleeping straight out of a book is the common flow, but the reader's own
-  // reader.exit only fires later, inside goToSleep() — after this drain. Carry
-  // the book and progress on sleep.enter itself so a sync handler bound to it
-  // pushes current progress on THIS connection, not the next one.
   pluginevents::Var vars[2];
   size_t varCount = 0;
   char percent[8];
@@ -306,8 +310,12 @@ static void deliverSleepPluginEvents() {
     vars[varCount++] = {"percent", percent};
   }
   pluginevents::emit(pluginevents::Event::SleepEnter, vars, varCount);
+}
+
+static void drainSleepPluginEvents(const bool showUi) {
+  GfxRenderer* const ui = showUi ? &renderer : nullptr;
   if (WiFi.status() == WL_CONNECTED) {
-    pluginevents::drain(&renderer);
+    pluginevents::drain(ui);
     return;
   }
   // Any connect-flagged queued event justifies the join, not only
@@ -318,7 +326,7 @@ static void deliverSleepPluginEvents() {
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
   if (!cred) return;
 
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  if (showUi) GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   WiFi.mode(WIFI_STA);
   WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
   const unsigned long joinDeadline = millis() + 10000;
@@ -327,22 +335,18 @@ static void deliverSleepPluginEvents() {
   }
   if (WiFi.status() == WL_CONNECTED) {
     trustedtime::startSync();  // snap the clock floor while the network is up
-    pluginevents::drain(&renderer);
+    pluginevents::drain(ui);
   } else {
     LOG_DBG("MAIN", "Sleep-event WiFi join timed out; deferring delivery");
   }
 }
 
-// Enter deep sleep mode
-void enterDeepSleep(bool fromTimeout = false) {
-  HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+static bool prepareSleepState(const bool fromTimeout) {
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
   // Sleep may end in a power-off (battery death, latch); persist the clock
   // floor now so a later cold boot resumes from it.
   trustedtime::note();
-
-  deliverSleepPluginEvents();
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -353,13 +357,22 @@ void enterDeepSleep(bool fromTimeout = false) {
   APP_STATE.showBootScreen = false;
 
   APP_STATE.saveToFile();
+  return isQuickResumeSleep;
+}
+
+// Enter deep sleep after any activity-owned preparation has completed.
+static void commitDeepSleep(const bool fromTimeout, const bool renderScreen) {
+  HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
-  activityManager.goToSleep(fromTimeout);
+  activityManager.goToSleep(fromTimeout, renderScreen);
 
-  if (isQuickResumeSleep) {
+  if (renderScreen &&
+      (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
+       (fromTimeout && SETTINGS.quickResumeSleepScreen ==
+                           CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT))) {
     saveSleepFrameBuffer();
   } else if (Storage.exists(SLEEP_FRAME_FILE)) {
     // A stale Quick Resume frame must not replace the selected sleep screen during wake.
@@ -379,6 +392,30 @@ void enterDeepSleep(bool fromTimeout = false) {
   LOG_DBG("MAIN", "Entering deep sleep");
 
   powerManager.startDeepSleep(gpio);
+}
+
+void enterDeepSleep(const bool fromTimeout) {
+  if (deferredSleepPending) {
+    return;
+  }
+  HalPowerManager::Lock powerLock;  // Keep local preparation and sleep rendering at normal CPU frequency
+  const bool isQuickResumeSleep = prepareSleepState(fromTimeout);
+  queueSleepPluginEvents();
+  if (activityManager.prepareDeferredSleep(fromTimeout)) {
+    deferredSleepPending = true;
+    activityManager.showSleepScreen(fromTimeout);
+    if (isQuickResumeSleep) {
+      saveSleepFrameBuffer();
+    }
+    return;
+  }
+  drainSleepPluginEvents(true);
+  commitDeepSleep(fromTimeout, true);
+}
+
+void completeDeferredDeepSleep(const bool fromTimeout) {
+  deferredSleepFromTimeout = fromTimeout;
+  deferredSleepCompletionRequested = true;
 }
 
 void setupDisplayAndFonts(bool seamless = false) {
@@ -651,7 +688,7 @@ void setup() {
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path, allowFastInitialReaderRefresh);
+    activityManager.goToReader(path, allowFastInitialReaderRefresh, true);
   }
 
   if (resume == BootResume::Silent) {
@@ -708,6 +745,26 @@ void loop() {
   }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
+
+  // Automatic sleep sync completes from inside an activity callback. Finish the
+  // sleep transition only after ActivityManager::loop() has unwound, so the
+  // manager never destroys an activity while one of its methods is still active.
+  if (deferredSleepCompletionRequested) {
+    deferredSleepCompletionRequested = false;
+    deferredSleepPending = false;
+    // The sleep screen is already on the panel: deliver plugin events headless.
+    drainSleepPluginEvents(false);
+    commitDeepSleep(deferredSleepFromTimeout, false);
+    return;
+  }
+
+  // The sleep screen is already visible. Keep servicing only the queued sync
+  // workflow until it requests completion; ignore input and repeated timeouts.
+  if (deferredSleepPending) {
+    activityManager.loop();
+    delay(10);
+    return;
+  }
 
   // The ROM console does not depend on Arduino USB CDC's connection state.
   if ((Serial || FREEINK_LOG_TRANSPORT == FREEINK_LOG_TRANSPORT_ROM_PRINTF) && millis() - lastMemPrint >= 10000) {

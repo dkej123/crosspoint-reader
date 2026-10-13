@@ -52,6 +52,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Fixed-size to avoid vector growth on the settings edit path; an empty
   // name marks an unused slot.
   std::array<HttpHeader, KOREADER_MAX_CUSTOM_HEADERS> customHeaders;
+  bool automaticProgressCheck = false;   // Pull remote progress when a book is explicitly opened or resumed
+  bool automaticProgressUpload = false;  // Push newer local progress when leaving a book
 
   // Private constructor for singleton
   KOReaderCredentialStore() = default;
@@ -111,6 +113,13 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Custom headers sent with every sync request (index must be < MAX_CUSTOM_HEADERS)
   void setCustomHeader(size_t index, const std::string& name, const std::string& value);
   const std::array<HttpHeader, MAX_CUSTOM_HEADERS>& getCustomHeaders() const { return customHeaders; }
+  // Automatic pull-only progress check
+  void setAutomaticProgressCheck(bool enabled);
+  bool getAutomaticProgressCheck() const { return automaticProgressCheck; }
+
+  // Automatic local-ahead upload when leaving a book
+  void setAutomaticProgressUpload(bool enabled);
+  bool getAutomaticProgressUpload() const { return automaticProgressUpload; }
 };
 
 // Helper macro to access credential store
