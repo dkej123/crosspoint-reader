@@ -35,8 +35,10 @@ BLE do kartkowania.
       statystyk `sensor.xteink_postep`
 - [ ] Wgrać firmware przez USB: `pio run -e x4pro-dkej -t upload`
 - [ ] Na czytniku: KOSync (URL `https://kosync.haosdk.pl`, Server type KOSync,
-      Binary, oba „Automatic…” włączone), ustawienia czytania od nowa
-      (Wi-Fi i login kosync powinny przejść z CrossInk — te same pliki)
+      Binary, oba „Automatic…” włączone), ustawienia czytania od nowa;
+      **wpisać ponownie hasła Wi-Fi (MikroTik, Pixel) i hasło kosync** — CrossInk
+      zapisuje je w swoim formacie (`CPV1` + suma kontrolna), którego CrossPoint
+      nie odczytuje (świadomie bez kodu zgodności)
 - [ ] Test na sprzęcie: auto-sync, kolejność przy uśpieniu (kosync → HA → sen),
       pilot BLE, dostarczenie do HA, powiadomienie na Pixelu
 - [ ] Pierwsze wydanie `1.6.5.1` na GitHubie forka (dla przyszłego OTA)
