@@ -7,6 +7,62 @@ Cel: synchronizacja pozycji czytania między Xteinkiem a telefonem (Readest)
 bez ręcznego klikania, potwierdzenie synchronizacji w Home Assistant oraz pilot
 BLE do kartkowania.
 
+## Stan (14.10.2026)
+
+### Zrobione
+- [x] Fork `dkej123/crosspoint-reader`, gałąź `dkej/x4pro`, env `x4pro-dkej`
+- [x] Automatyczny KOSync — scalony upstream PR #2760 (pobieranie przy
+      otwarciu, wysyłanie przy wyjściu/uśpieniu, nigdy nie nadpisuje dalszej
+      pozycji z serwera)
+- [x] OTA z wydań forka (wersje `1.6.5.N`), skrypt `scripts/dkej_release.sh`
+- [x] Pilot BLE do kartkowania (tylko przy otwartej książce + przełącznik +
+      ekran parowania)
+- [x] Wtyczka SD → webhook Home Assistant (`sd-card/plugins/homeassistant`),
+      filtr `{event.NAME|json}` w firmware
+- [x] Polskie tłumaczenia nowych opcji
+- [x] Przegląd kodu — 5 błędów poprawionych (2 z PR #2760, 2 w pilocie BLE,
+      1 we wtyczkach); szczegóły w „Przegląd i testy”
+- [x] 50 nowych testów z wymagań, całość 600/600; firmware się buduje
+- [x] HA: statystyki czytania (import z CrossInk), widok „Czytanie”,
+      dziennik sesji, potwierdzenie sync na Pixela
+- [x] Pełna kopia karty SD z CrossInk (`~/Workspace/CrossPoint/backup-crossink-2026-10-13/`)
+- [x] Wtyczka HA wgrana na kartę SD czytnika
+
+### Do zrobienia
+- [ ] HA: ustawić `kosync_key` w `secrets.yaml` (MD5 hasła) i zrestartować HA
+      (`utility_meter`, `rest_command`)
+- [ ] HA: usunąć encję `sensor.xteink_statystyki_test` i testowy wpis
+      statystyk `sensor.xteink_postep`
+- [ ] Wgrać firmware przez USB: `pio run -e x4pro-dkej -t upload`
+- [ ] Na czytniku: KOSync (URL `https://kosync.haosdk.pl`, Server type KOSync,
+      Binary, oba „Automatic…” włączone), ustawienia czytania od nowa
+      (Wi-Fi i login kosync powinny przejść z CrossInk — te same pliki)
+- [ ] Test na sprzęcie: auto-sync, kolejność przy uśpieniu (kosync → HA → sen),
+      pilot BLE, dostarczenie do HA, powiadomienie na Pixelu
+- [ ] Pierwsze wydanie `1.6.5.1` na GitHubie forka (dla przyszłego OTA)
+- [ ] Opcjonalnie: zgłosić błędy z przeglądu w upstream PR #2760
+- [ ] Projekt dashboardu „Czytanie” (lista encji niżej)
+
+### Encje HA dla dashboardu
+Proste sensory: `sensor.xteink_ksiazka` (tytuł), `sensor.xteink_postep` (%),
+`sensor.xteink_tempo_czytania` (%/h), `sensor.xteink_szacowany_czas_do_konca`
+(h), `sensor.xteink_czas_czytania_dzis` (min), `sensor.xteink_czas_laczny` (h,
+długoterminowe statystyki), `sensor.xteink_sesje`, `sensor.xteink_srednia_sesja`
+(min), `sensor.xteink_seria_biezaca` (dni), `sensor.xteink_seria_najdluzsza` (dni).
+
+`sensor.xteink_statystyki` (stan = minuty łącznie), atrybuty:
+- `pory_dnia_s` — 4 × sekundy [rano 5–12, popołudnie 12–17, wieczór 17–21, noc 21–5]
+- `dni_tygodnia_s` — 7 × sekundy [pon..nd]
+- `dni_czytania` — daty `RRRR-MM-DD` (180 dni); `dni_czytania_lacznie`
+- `dzienne_s` — `{RRRR-MM-DD: sekundy}` (35 dni)
+- `ksiazki` — `{hash: {tytul, plik, czas_s, sesje, start, postep, ukonczona, ostatnio}}`; `biezaca_ksiazka` = hash
+- `ostatnie_sesje` — do 50: `{ts, data, od, do, ksiazka, min, postep_od, postep_do}`
+- `ostatnia_sesja`, `laczny_czas_s`, `sesje`, `seria_najdluzsza`
+
+Widok: dashboard „Dom” (`lovelace`) → `czytanie` (typ `sections`, karty
+standardowe HA). `dzienne_s` i `ostatnie_sesje` są puste do pierwszych sesji z
+nowego firmware.
+
 ## Sprzęt
 
 | | X4 / X3 | **X4 Pro (mój)** |
