@@ -172,6 +172,12 @@ nie commitować).
   - zdarzenia spóźnione liczone do dnia sesji, nie dostarczenia;
   - `sleep.enter` z prawdziwym procentem aktualizuje postęp książki;
   - limit rozmiaru atrybutów (przycinanie przy > 14 KB).
+  - **dzień czytania kończy się o 05:00**, nie o północy — czytanie po północy
+    liczy się do poprzedniego dnia (`dzienne_s`, `dni_czytania`,
+    `dni_tygodnia_s`, serie, „dziś”, kalendarz); pory dnia bez zmian;
+  - zdarzenie `korekta` (jednorazowe, idempotentne po `id`, ślad w atrybucie
+    `korekty`): przesunięcia sekund między dniami tygodnia / porami dnia,
+    dodanie / usunięcie dni czytania.
 - Sensory pochodne: `sensor.xteink_czas_laczny` (h, `total_increasing` →
   długoterminowe statystyki), `_sesje`, `_seria_biezaca`, `_seria_najdluzsza`,
   `_srednia_sesja`, `_czas_czytania_dzis`, `_ksiazka`, `_postep`,
@@ -200,7 +206,10 @@ dni tygodnia, książki, ostatnie sesje, logbook.
 idempotentne): 608 min / 44 sesje, pory dnia i dni tygodnia z
 `global_stats.bin`, 18 dni czytania, seria 15; książki kluczowane hashem
 KOReadera (partial MD5): Silos `cc8ddeaee04f07c4541e97bb9ee19a6a` (ukończona
-5.10), Zmiana `2526d505af62cf9a8e8df4a3a080c999` (23,1%). Przybliżone czasy
+5.10), Zmiana `2526d505af62cf9a8e8df4a3a080c999` (23,1%). Korekta 14.10.2026
+(`ha-xteink/korekta_2026-10-10.py`): CrossInk liczył dni kalendarzowo, a 34,5 min
+nocy przypisane niedzieli 11.10 to czytanie w sobotę 10.10 po północy — przeniesione
+na sobotę; 10.10 dniem czytania, najdłuższa seria 19 dni (25.09–13.10). Przybliżone czasy
 dzienne z kopii zapasowych CrossInk celowo pominięte. Pełna kopia karty SD z
 CrossInk: `~/Workspace/CrossPoint/backup-crossink-2026-10-13/` (zawiera hasła —
 nie commitować).
