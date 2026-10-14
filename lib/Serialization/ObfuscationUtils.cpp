@@ -9,8 +9,6 @@
 #include <cstring>
 #include <limits>
 
-#include "CrossInkCredentialCompat.h"
-
 namespace obfuscation {
 
 namespace {
@@ -85,11 +83,6 @@ std::string deobfuscateFromBase64(const char* encoded, const size_t maxDecodedLe
   }
   result.resize(decodedLen);
   xorTransform(result);
-  // Credentials written by CrossInk before switching firmware carry a
-  // "CPV1" + checksum header; reduce them to the plain password.
-  if (stripCrossInkValidated(result, getHwKey(), HW_KEY_LEN)) {
-    LOG_DBG("OBF", "Read CrossInk-format credential");
-  }
   return result;
 }
 
