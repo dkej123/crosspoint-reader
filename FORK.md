@@ -29,8 +29,8 @@ BLE do kartkowania.
 - [x] Wtyczka HA wgrana na kartę SD czytnika
 
 ### Do zrobienia
-- [ ] HA: ustawić `kosync_key` w `secrets.yaml` (MD5 hasła) i zrestartować HA
-      (`utility_meter`, `rest_command`)
+- [ ] HA: dopisać w panelu HTTP Requests nagłówek `x-auth-key` (MD5 hasła) do
+      zapytania „kosync progress” (restart HA zrobiony 14.10)
 - [ ] HA: usunąć encję `sensor.xteink_statystyki_test` i testowy wpis
       statystyk `sensor.xteink_postep`
 - [ ] Wgrać firmware przez USB: `pio run -e x4pro-dkej -t upload`
@@ -189,9 +189,13 @@ nie commitować).
 **`configuration.yaml` → `utility_meter:`** — `xteink_czytanie_dzien /
 _tydzien / _miesiac` na `sensor.xteink_czas_laczny` (wymaga restartu HA).
 
-**`configuration.yaml` → `rest_command.kosync_get_progress`** — GET
-`https://kosync.haosdk.pl/syncs/progress/<hash>` z nagłówkami KOReadera i
-`!secret kosync_user` / `!secret kosync_key` (= MD5 hasła) — wymaga restartu.
+**Integracja HTTP Requests (`dkej123/ha-http-requests` ≥ 0.8.0)** — zapytanie
+„kosync progress” (sekcja Xteink, entry `01M4XJ9P7Y8GZPQ6XM1MRB6VJ0`): GET
+`https://kosync.haosdk.pl/syncs/progress/{{ document }}`, nagłówki `Accept`,
+`x-auth-user` oraz `x-auth-key` (MD5 hasła — wpisany ręcznie w panelu, nie w
+YAML). Automatyzacja wywołuje je przez `http_requests.execute` z
+`variables: {document: …}`. Zastąpiło wcześniejszy `rest_command` (usunięty
+14.10, razem z `kosync_user`/`kosync_key` w `secrets.yaml`).
 
 **`automations.yaml`**
 - „Xteink – potwierdzenie synchronizacji (push na Pixel)” — po nowej,
