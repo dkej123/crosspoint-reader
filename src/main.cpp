@@ -40,6 +40,7 @@
 #include "ble/BleRemote.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/SleepWifiPolicy.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
@@ -325,7 +326,11 @@ static void drainSleepPluginEvents(const bool showUi) {
   // same sleep, and a progress-sync plugin usually subscribes to it alone.
   if (!pluginevents::wantsConnectAny()) return;
   if (powerManager.getBatteryPercentage() < 20) return;
-  const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
+  // The store is only loaded by the Wi-Fi selection screen; a boot that goes
+  // from Home straight to sleep would otherwise see no saved network and skip
+  // delivery silently (upstream PR #3867). loadFromFile() is a small JSON read.
+  WIFI_STORE.loadFromFile();
+  const auto cred = sleepJoinCredential(WIFI_STORE);
   if (!cred) return;
 
   if (showUi) GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
