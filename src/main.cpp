@@ -334,6 +334,9 @@ static void drainSleepPluginEvents(const bool showUi) {
   if (!cred) return;
 
   if (showUi) GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  // A failed join just before (the KOSync sleep upload) can leave the station
+  // mid-connect, and begin() then fails with ESP_ERR_WIFI_STATE; start clean.
+  WiFi.disconnect(true, false);
   WiFi.mode(WIFI_STA);
   WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
   const unsigned long joinDeadline = millis() + 10000;

@@ -22,25 +22,23 @@ BLE do kartkowania.
 - [x] Polskie tłumaczenia nowych opcji
 - [x] Przegląd kodu — 5 błędów poprawionych (2 z PR #2760, 2 w pilocie BLE,
       1 we wtyczkach); szczegóły w „Przegląd i testy”
-- [x] 50 nowych testów z wymagań, całość 600/600; firmware się buduje
+- [x] Testy z wymagań, całość 629/629; firmware się buduje
 - [x] HA: statystyki czytania (import z CrossInk), widok „Czytanie”,
       dziennik sesji, potwierdzenie sync na Pixela
 - [x] Pełna kopia karty SD z CrossInk (`~/Workspace/CrossPoint/backup-crossink-2026-10-13/`)
 - [x] Wtyczka HA wgrana na kartę SD czytnika
+- [x] Firmware na czytniku, test na sprzęcie 14.10: kosync przy uśpieniu, sesje
+      i push w HA, cofanie (bez nadpisania), pilot BLE (C6 jako pilot testowy)
+- [x] Niezawodność synchronizacji przy uśpieniu (sekcja 1a): unikalne id
+      zdarzeń, ponawianie zapytań kosync, ponawianie Wi-Fi do ~2 min
+- [x] HA: zapytanie kosync w integracji HTTP Requests (zamiast `rest_command`),
+      opóźnienie 20 s i tolerancja 0,15 pkt w pushu
 
 ### Do zrobienia
-- [ ] HA: dopisać w panelu HTTP Requests nagłówek `x-auth-key` (MD5 hasła) do
-      zapytania „kosync progress” (restart HA zrobiony 14.10)
 - [ ] HA: usunąć encję `sensor.xteink_statystyki_test` i testowy wpis
       statystyk `sensor.xteink_postep`
-- [ ] Wgrać firmware przez USB: `pio run -e x4pro-dkej -t upload`
-- [ ] Na czytniku: KOSync (URL `https://kosync.haosdk.pl`, Server type KOSync,
-      Binary, oba „Automatic…” włączone), ustawienia czytania od nowa;
-      **wpisać ponownie hasła Wi-Fi (MikroTik, Pixel) i hasło kosync** — CrossInk
-      zapisuje je w swoim formacie (`CPV1` + suma kontrolna), którego CrossPoint
-      nie odczytuje (świadomie bez kodu zgodności)
-- [ ] Test na sprzęcie: auto-sync, kolejność przy uśpieniu (kosync → HA → sen),
-      pilot BLE, dostarczenie do HA, powiadomienie na Pixelu
+- [ ] Usunąć z `/.crosspoint/wifi.json` na karcie SD sieć `Pixel_8598` (śmieć
+      po CrossInku; nie widać jej w ustawieniach, bo nie jest w zasięgu)
 - [ ] Pierwsze wydanie `1.6.5.1` na GitHubie forka (dla przyszłego OTA)
 - [ ] Opcjonalnie: zgłosić błędy z przeglądu w upstream PR #2760
 - [ ] Projekt dashboardu „Czytanie” (lista encji niżej)
@@ -111,6 +109,45 @@ Konfiguracja na czytniku:
 Serwer `kosync.haosdk.pl` to zwykły koreader-sync-server — wymaga nagłówka
 `Accept: application/vnd.koreader.v1+json` (inaczej HTTP 412) i nie ma API
 Athene (`/athene/v1/*` → 404), dlatego aplikacja Athene się z nim nie loguje.
+
+### 1a. Niezawodność synchronizacji przy uśpieniu (14.10.2026)
+
+Znalezione na sprzęcie z logiem debug (`env:x4pro-dkej-debug`, `LOG_LEVEL=2`):
+
+- **Sesje odrzucane przez HA jako duplikaty.** Id zdarzenia wtyczki było
+  `<esp_random()>-<licznik>`; przed włączeniem radia `esp_random()` daje po
+  każdym wybudzeniu tę samą liczbę, więc pierwsza sesja po każdym wybudzeniu
+  miała id `3b9c2a9f-1` i HA ją pomijał. Teraz
+  `<losowe>-<licznik rozruchów w NVS>-<licznik>` (`src/util/PluginEventId.h`,
+  NVS `pevt/boot`).
+- **Zgubione zapytanie kosync przerywało wysyłkę.** Raz drugie zapytanie
+  (kontrolne, hash nazwy pliku) nie dotarło do nginx na RPi (zginęło między
+  czytnikiem, Cloudflare i tunelem), czekało do końca limitu 15 s, a PR #2760
+  wtedy rezygnuje z wysyłki. Teraz każde zapytanie automatyczne (odczyty i
+  wysyłka) przy błędzie sieci/5xx jest ponawiane co 0,5 s, próba max 5 s,
+  całość max 120 s (`lib/KOReaderSync/SyncRetryPolicy.h`). Błędy logowania,
+  JSON, brak pamięci — bez ponawiania. Zabezpieczenie przed nadpisaniem
+  dalszej pozycji bez zmian.
+- **Wi-Fi poddawało się po 6 s.** Join z MikroTikiem trwa 4–5 s (−76 dBm), raz
+  przekroczył 6 s. Teraz pierwsza sieć ma 10 s (ostatnia 15 s), a gdy wszystkie
+  zapisane sieci zawiodą, czytnik zaczyna kolejną rundę (przerwa 1 s) aż do
+  100 s (`AutomaticWifiConnectionPolicy.h`, `WifiSelectionActivity`). Koszt:
+  poza zasięgiem znanych sieci uśpienie trwa ~2 min z włączonym radiem.
+- **Wysyłka do HA po nieudanym Wi-Fi nie startowała** (`sta is connecting,
+  cannot set config`) — przed joinem zdarzeń przy uśpieniu `WiFi.disconnect`.
+
+Zachowanie, które jest celowe (nie błąd):
+- różnica ±1 strony = ta sama pozycja → bez wysyłki do kosync,
+- strona liczy się do sesji po ≥ 2 s, sesja ≥ 10 s; szybkie kartkowanie albo
+  cofanie nie tworzy sesji, więc nie ma pusha,
+- tryb „Ask” przy wyjściu z książki pyta, gdy serwer jest dalej.
+
+**Pilot testowy:** ESP32-C6 jako klawiatura BLE HID
+(`~/Workspace/CrossPoint/ble-remote-tester/`, NimBLE-Arduino), sterowany z
+terminala poleceniem `pilot` (`pilot n|p|d|u|e|s|log`, bez argumentu tryb
+interaktywny). macOS nie pozwala Macowi udawać urządzenia BLE HID
+(`CBErrorDomain 8`). Sprawdzone 14.10: parowanie, radio tylko przy otwartej
+książce, każde naciśnięcie = jedna strona.
 
 ### 2. OTA z własnych wydań
 
@@ -199,9 +236,12 @@ YAML). Automatyzacja wywołuje je przez `http_requests.execute` z
 
 **`automations.yaml`**
 - „Xteink – potwierdzenie synchronizacji (push na Pixel)” — po nowej,
-  najnowszej sesji odczytuje pozycję z kosync i wysyła na
-  `notify.mobile_app_pixel_9`: ✅ zsynchronizowane / ℹ️ na serwerze dalej
-  (nie nadpisano) / ⚠️ nie dotarło.
+  najnowszej sesji czeka 20 s (czytnik wysyła webhook zaraz po połączeniu z
+  Wi-Fi, a pozycję do kosync chwilę później), odczytuje pozycję z kosync
+  akcją `http_requests.execute` (integracja HTTP Requests, zapytanie
+  „kosync progress” z `{{ document }}` w URL) i wysyła na
+  `notify.mobile_app_pixel_9`: ✅ zsynchronizowane (różnica ≤ 0,15 pkt) /
+  ℹ️ na serwerze dalej (nie nadpisano) / ⚠️ nie dotarło.
 - „Xteink – sesja czytania w dzienniku” — wpis do logbooka, np.
   „Zmiana: 25 min, 31% → 34%” (spóźnione: „sesja z RRRR-MM-DD, dosłana później”).
 
@@ -228,7 +268,10 @@ Kopie konfiguracji HA: `configuration.yaml.pre-xteink-20261013`,
 `configuration.yaml.pre-xteink-stats-20261013`,
 `automations.yaml.pre-xteink-20261013`,
 `automations.yaml.pre-xteink-stats-20261013`,
-`secrets.yaml.pre-kosync-20261013`.
+`secrets.yaml.pre-kosync-20261013`,
+`automations.yaml.pre-http-requests-kosync-20261014`,
+`automations.yaml.pre-xteink-opoznienie-20261014`,
+`automations.yaml.pre-xteink-tolerancja-20261014`.
 
 ### 4. Pilot BLE do kartkowania
 
@@ -274,9 +317,11 @@ Błędy znalezione w przeglądzie (poprawione):
 
 Testy (GoogleTest, `test/`, pisane z wymagań, nie z kodu): `ble_remote`,
 `ota_version`, `sleep_frame_policy`, `ha_plugin_manifest` (prawdziwy
-`device.json`, ArduinoJson 7.4.2 jak w firmware), `automatic_check_abandon`.
+`device.json`, ArduinoJson 7.4.2 jak w firmware), `automatic_check_abandon`,
+`sleep_wifi_policy`, `orientation_rotation`, `plugin_event_id`, `sync_retry`
+(+ przepisane `AutomaticWifiConnectionPolicyTest`).
 Każdy poprawiony błąd został celowo przywrócony, by potwierdzić, że test go
-wykrywa. Całość: **600/600**.
+wykrywa. Całość: **629/629**.
 
 ```bash
 cmake -S test -B build/test && cmake --build build/test -j && ctest --test-dir build/test
@@ -310,3 +355,11 @@ pio run -e x4pro-dkej
 ```
 
 Gdy PR #2760 zostanie scalony w upstreamie, merge powinien się „wchłonąć”.
+
+Diagnoza na sprzęcie: `pio run -e x4pro-dkej-debug` (to samo co `x4pro-dkej`,
+wersja `…-debug`, `LOG_LEVEL=2`), wgranie tylko aplikacji
+`esptool --chip esp32s3 write-flash 0x10000 .pio/build/x4pro-dkej-debug/firmware.bin`
+i log z USB (115200). Czytnik musi być wybudzony przez całe wgrywanie — gdy
+zaśnie w trakcie, aplikacja jest uszkodzona do czasu ponownego wgrania
+(bootloader i partycje zostają, więc to zawsze da się naprawić). Po diagnozie
+wrócić na `x4pro-dkej`.

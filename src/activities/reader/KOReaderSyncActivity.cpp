@@ -13,6 +13,7 @@
 #include "AutomaticProgressCheckPolicy.h"
 #include "AutomaticProgressUploadPolicy.h"
 #include "AutomaticWifiConnectionPolicy.h"
+#include "SyncRetryPolicy.h"
 #include "DeepSleep.h"
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
@@ -149,11 +150,42 @@ void KOReaderSyncActivity::completeAlreadySynced() {
 }
 
 uint32_t KOReaderSyncActivity::automaticOperationRemainingMs() const {
-  return AutomaticWifiConnectionPolicy::remainingBackgroundTimeMs(millis(), automaticOperationStartedAt);
+  return syncretry::remainingMs(millis(), automaticOperationStartedAt);
 }
 
 bool KOReaderSyncActivity::automaticOperationDeadlineExpired() const {
   return automaticPush() && automaticOperationRemainingMs() == 0;
+}
+
+template <class Attempt>
+KOReaderSyncClient::Error KOReaderSyncActivity::withRetries(const char* what, Attempt&& attempt) {
+  struct Clock {
+    const KOReaderSyncActivity& self;
+    uint32_t remaining() const { return self.automaticOperationRemainingMs(); }
+    void wait(const uint32_t ms) const { delay(ms); }
+  } clock{*this};
+  int attempts = 0;
+  const auto counted = [&](const uint32_t timeoutMs) {
+    attempts++;
+    return attempt(timeoutMs);
+  };
+  const auto classify = [](const KOReaderSyncClient::Error e) {
+    switch (e) {
+      case KOReaderSyncClient::OK:
+      case KOReaderSyncClient::NOT_FOUND:
+        return syncretry::Outcome::Ok;
+      case KOReaderSyncClient::NETWORK_ERROR:
+      case KOReaderSyncClient::SERVER_ERROR:
+        return syncretry::Outcome::Transient;
+      default:
+        return syncretry::Outcome::Permanent;
+    }
+  };
+  const auto result = syncretry::run(counted, classify, clock, KOReaderSyncClient::NETWORK_ERROR);
+  if (attempts != 1 || result != KOReaderSyncClient::OK) {
+    LOG_DBG("KOSync", "Automatic %s: result=%d after %d attempt(s)", what, result, attempts);
+  }
+  return result;
 }
 
 KOReaderSyncClient::Error KOReaderSyncActivity::getProgress(const std::string& hash, KOReaderProgress& progress) {
@@ -161,13 +193,10 @@ KOReaderSyncClient::Error KOReaderSyncActivity::getProgress(const std::string& h
     return KOReaderSyncClient::getProgress(hash, progress);
   }
 
-  const uint32_t remaining = automaticOperationRemainingMs();
-  if (remaining == 0) {
-    LOG_DBG("KOSync", "Automatic upload deadline reached before progress lookup");
-    return KOReaderSyncClient::NETWORK_ERROR;
-  }
-  return KOReaderSyncClient::getProgress(hash, progress, remaining,
-                                         [this]() { return automaticOperationDeadlineExpired(); });
+  return withRetries("lookup", [&](const uint32_t timeoutMs) {
+    return KOReaderSyncClient::getProgress(hash, progress, timeoutMs,
+                                           [this]() { return automaticOperationDeadlineExpired(); });
+  });
 }
 
 KOReaderSyncClient::Error KOReaderSyncActivity::updateProgress(const KOReaderProgress& progress) {
@@ -175,13 +204,10 @@ KOReaderSyncClient::Error KOReaderSyncActivity::updateProgress(const KOReaderPro
     return KOReaderSyncClient::updateProgress(progress);
   }
 
-  const uint32_t remaining = automaticOperationRemainingMs();
-  if (remaining == 0) {
-    LOG_DBG("KOSync", "Automatic upload deadline reached before progress update");
-    return KOReaderSyncClient::NETWORK_ERROR;
-  }
-  return KOReaderSyncClient::updateProgress(progress, remaining,
-                                            [this]() { return automaticOperationDeadlineExpired(); });
+  return withRetries("update", [&](const uint32_t timeoutMs) {
+    return KOReaderSyncClient::updateProgress(progress, timeoutMs,
+                                              [this]() { return automaticOperationDeadlineExpired(); });
+  });
 }
 
 void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {

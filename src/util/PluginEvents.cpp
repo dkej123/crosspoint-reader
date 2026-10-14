@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Preferences.h>
 #include <esp_random.h>
 #include <time.h>
 
@@ -11,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "PluginEventId.h"
 #include "PluginHttp.h"
 #include "PluginLocations.h"
 #include "PluginTemplate.h"
@@ -140,21 +142,36 @@ bool wantsConnectAny() {
   return false;
 }
 
+namespace {
+
+// Persistent per-boot counter; one NVS write per boot that emits an event.
+uint32_t nextBootCount() {
+  Preferences prefs;
+  if (!prefs.begin("pevt", false)) {
+    LOG_ERR("PEVT", "NVS unavailable; event ids rely on RNG only");
+    return 0;
+  }
+  const uint32_t count = prefs.getUInt("boot", 0) + 1;
+  prefs.putUInt("boot", count);
+  prefs.end();
+  return count;
+}
+
+}  // namespace
+
 void emit(const Event e, const Var* vars, const size_t varCount) {
   if (!anySubscriber(e)) return;
 
-  // One line: {"e":"reader.exit","id":"3fa9c21b-7","ts":1734212345,"vars":{"book":"...","percent":"74"}}
+  // One line: {"e":"reader.exit","id":"3fa9c21b-42-7","ts":1734212345,"vars":{"book":"...","percent":"74"}}
   JsonDocument doc;
   doc["e"] = EVENT_NAMES[static_cast<size_t>(e)];
-  // Unique id for server-side dedupe of at-least-once delivery: a per-boot
-  // nonce plus an in-session counter, unique across queued events and reboots
-  // without an SD read-modify-write per event. ts alone repeats (1-second
-  // resolution, and 0 whenever the clock was never set).
+  // Unique id for server-side dedupe of at-least-once delivery (see
+  // PluginEventId.h). ts alone repeats (1-second resolution, and 0 whenever
+  // the clock was never set).
   static const uint32_t bootNonce = esp_random();
+  static const uint32_t bootCount = nextBootCount();
   static uint32_t seq = 0;
-  char id[24];
-  snprintf(id, sizeof(id), "%08lx-%lu", static_cast<unsigned long>(bootNonce), static_cast<unsigned long>(++seq));
-  doc["id"] = id;
+  doc["id"] = makeEventId(bootNonce, bootCount, ++seq);
   // Best-effort unix time: 0 when the clock was never set (no RTC, no NTP yet).
   doc["ts"] = static_cast<long long>(time(nullptr));
   JsonObject varsObj = doc["vars"].to<JsonObject>();

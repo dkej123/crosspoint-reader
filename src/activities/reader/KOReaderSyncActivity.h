@@ -104,6 +104,8 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void onWifiSelectionComplete(bool success);
   void performSync();
   void performUpload();
+  template <class Attempt>
+  KOReaderSyncClient::Error withRetries(const char* what, Attempt&& attempt);
   KOReaderSyncClient::Error getProgress(const std::string& hash, KOReaderProgress& progress);
   KOReaderSyncClient::Error updateProgress(const KOReaderProgress& progress);
   bool automaticOperationDeadlineExpired() const;

@@ -488,6 +488,15 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
     if (!backgroundAutoConnectExpired() && tryNextSavedCredential()) {
       return;
     }
+    // Fork: every saved network failed this round; go again while time is left.
+    if (AutomaticWifiConnectionPolicy::canStartAnotherRound(millis(), autoConnectSessionStartTime)) {
+      LOG_DBG("WIFI", "All saved networks failed; starting another round");
+      delay(AutomaticWifiConnectionPolicy::ROUND_PAUSE_MS);
+      autoAttemptedSsids.clear();
+      if (tryNextSavedCredential()) {
+        return;
+      }
+    }
 
     onComplete(false);
     return;
