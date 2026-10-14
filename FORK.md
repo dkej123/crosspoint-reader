@@ -179,7 +179,8 @@ nie commitować).
     `dni_tygodnia_s`, serie, „dziś”, kalendarz); pory dnia bez zmian;
   - zdarzenie `korekta` (jednorazowe, idempotentne po `id`, ślad w atrybucie
     `korekty`): przesunięcia sekund między dniami tygodnia / porami dnia,
-    dodanie / usunięcie dni czytania.
+    dodanie / usunięcie dni czytania, `przeklucz_ksiazki` (scalenie wpisów
+    książki spod starego hasha pod nowy).
 - Sensory pochodne: `sensor.xteink_czas_laczny` (h, `total_increasing` →
   długoterminowe statystyki), `_sesje`, `_seria_biezaca`, `_seria_najdluzsza`,
   `_srednia_sesja`, `_czas_czytania_dzis`, `_ksiazka`, `_postep`,
@@ -207,8 +208,11 @@ dni tygodnia, książki, ostatnie sesje, logbook.
 **Import z CrossInk** (13.10.2026, jednorazowe zdarzenie `import.crossink`,
 idempotentne): 608 min / 44 sesje, pory dnia i dni tygodnia z
 `global_stats.bin`, 18 dni czytania, seria 15; książki kluczowane hashem
-KOReadera (partial MD5): Silos `cc8ddeaee04f07c4541e97bb9ee19a6a` (ukończona
-5.10), Zmiana `2526d505af62cf9a8e8df4a3a080c999` (23,1%). Korekta 14.10.2026
+KOReadera (partial MD5, pierwszy fragment od offsetu 0 — jak w firmware): Silos
+`8c71eec1cc13ddd041ba9a9d531617c4` (ukończona 5.10), Zmiana
+`ee588842248b1d44e453836ae77b7a5d` (23,1%). Import pierwotnie policzył hashe od
+offsetu 256 — poprawione 14.10 korektą `przeklucz_ksiazki`
+(`ha-xteink/korekta_hashe_2026-10-14.py`), po pierwszej sesji z czytnika. Korekta 14.10.2026
 (`ha-xteink/korekta_2026-10-10.py`): CrossInk liczył dni kalendarzowo, a 34,5 min
 nocy przypisane niedzieli 11.10 to czytanie w sobotę 10.10 po północy — przeniesione
 na sobotę; 10.10 dniem czytania, najdłuższa seria 19 dni (25.09–13.10). Przybliżone czasy
