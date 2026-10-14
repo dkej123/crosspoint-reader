@@ -39,6 +39,7 @@
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
 #include "MappedProgressPositionPolicy.h"
+#include "OrientationRotation.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
@@ -942,9 +943,9 @@ void EpubReaderActivity::loop() {
   }
 
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
+    // Right (next) holds rotate clockwise, left (previous) counter-clockwise.
     const uint8_t newOrientation =
-        nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
-                      : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
+        rotateOrientation(SETTINGS.orientation, /*clockwise=*/nextTriggered, SETTINGS.ORIENTATION_COUNT);
     applyOrientation(newOrientation);
     if (touch.prev || touch.next) haptic_feedback::touchAction(true);
     requestUpdate();
