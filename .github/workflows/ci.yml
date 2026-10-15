@@ -6,6 +6,13 @@ name: CI (build)
 # 7-way `build` matrix that ran in parallel on hosted runners now runs
 # sequentially, so a full CI run takes noticeably longer. workflow_dispatch
 # added for manual test runs without needing a push to master or an open PR.
+#
+# The three `actions/cache` steps (PlatformIO packages x2, googletest source)
+# that made sense on short-lived hosted runners are gone: this runner's own
+# disk already survives between jobs, so a save/restore round-trip through
+# GitHub's cache service was pure overhead - and, on this host's home uplink,
+# the first save of the PlatformIO cache alone took long enough per job (5+ GB
+# uploaded, still climbing) to turn a 7-job matrix into a multi-hour run.
 on:
   push:
     branches: [master]
@@ -68,13 +75,6 @@ jobs:
             "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
             "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.platformio
-          key: pio-v2-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-v2-${{ runner.os }}-
-
       - name: Install cppcheck runtime dependency
         run: |
           # pioarduino's Linux cppcheck binary links against libpcre.so.3.
@@ -133,13 +133,6 @@ jobs:
             "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
             "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
 
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.platformio
-          key: pio-v3-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-v3-${{ runner.os }}-${{ matrix.env }}-
-
       - name: Pin pioarduino core inside the platform penv
         run: |
           set -euo pipefail
@@ -191,12 +184,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
-
-      - name: Cache googletest source
-        uses: actions/cache@v4
-        with:
-          path: build/test/_deps/googletest-src
-          key: ${{ runner.os }}-googletest-${{ hashFiles('test/CMakeLists.txt') }}
 
       - name: Configure
         run: cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release
