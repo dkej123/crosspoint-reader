@@ -1,16 +1,23 @@
 name: CI (build)
 
+# Runs on this fork's own self-hosted runner (supervisor-crosspoint-reader, see
+# docs/contributing/agent-runner-ci-triage.md for why) instead of GitHub-hosted
+# ubuntu-latest, switched 2026-10-15. One container = one job at a time: the
+# 7-way `build` matrix that ran in parallel on hosted runners now runs
+# sequentially, so a full CI run takes noticeably longer. workflow_dispatch
+# added for manual test runs without needing a push to master or an open PR.
 on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   clang-format:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,7 +41,7 @@ jobs:
           git diff --exit-code || (echo "Please run 'bin/clang-format-fix' to fix formatting issues" && exit 1)
 
   cppcheck:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v6
         with:
@@ -79,7 +86,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.env }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -174,7 +181,7 @@ jobs:
           if-no-files-found: error
 
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v6
         with:
@@ -210,7 +217,7 @@ jobs:
       - cppcheck
       - unit-tests
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Fail because needed jobs failed
         # Fail if any job failed or was cancelled (skipped jobs are ok)
