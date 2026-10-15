@@ -12,10 +12,13 @@ if gh release view "$version" --repo "$repo" >/dev/null 2>&1; then
 fi
 pio run -e x4pro-dkej
 asset="crosspoint-${version}-x4pro.bin"
-cp .pio/build/x4pro-dkej/firmware.bin "dist-${asset}"
+# The device looks the asset up by file name; gh's "file#label" only sets the
+# display label, so upload a file that already has the exact name.
+dist=$(mktemp -d)
+trap 'rm -rf "$dist"' EXIT
+cp .pio/build/x4pro-dkej/firmware.bin "${dist}/${asset}"
 git push origin HEAD
 gh release create "$version" --repo "$repo" --target "$(git rev-parse HEAD)" \
   --title "$version (X4 Pro fork)" --notes "Fork build of $(git rev-parse --short HEAD)." \
-  "dist-${asset}#${asset}"
-rm -f "dist-${asset}"
+  "${dist}/${asset}"
 echo "published $asset to $repo"
