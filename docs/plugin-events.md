@@ -51,11 +51,24 @@ against newer firmware degrades gracefully on older firmware.
 | `reader.session`  | An active-reading summary is flushed before sleep/exit | fields documented below              |
 | `book.downloaded` | An on-device catalog download completed                | `path`, `title`, `plugin`            |
 | `sleep.enter`     | The device begins entering deep sleep                  | `book`, `percent` when sleeping out of a reader, else none |
+| `kosync.result`   | An automatic KOReader progress upload finished (fork)  | `book`, `document`, `result`, `percent`, `remote_percent` |
 
 `sleep.enter` carries the reader snapshot because sleeping straight out of a
 book is the common flow, and the reader's own `reader.exit` fires after the
 sleep-time drain: binding a progress-sync handler to both events means the
 current position is pushed on the sleep connection, not the next one.
+
+`kosync.result` (fork) reports what the automatic upload on reader exit or
+sleep did, so a plugin does not have to poll the sync server to find out. An
+exit without a page change starts no upload and emits nothing.
+`document` is the KOReader binary document id (as in `reader.session`).
+`result` is one of `uploaded`, `in_sync` (server already at this page),
+`remote_ahead` (server further, not overwritten), `no_wifi`, `failed`
+(network or server error after retries; the next exit from the same book
+retries even without a page change) and `error` (credentials, hash, invalid
+or unmappable progress). `percent` and `remote_percent`
+are 0-100 with two decimals; `remote_percent` is empty when unknown. Events
+queued during the upload are delivered after it, on the same connection.
 
 ### `reader.session` contract
 

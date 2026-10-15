@@ -31,4 +31,18 @@ class MappedProgressPositionPolicy {
     }
     return pageDelta > 0 ? MappedProgressPositionOrder::LOCAL_AHEAD : MappedProgressPositionOrder::REMOTE_AHEAD;
   }
+
+  // Fork: whether an automatic upload should replace the server record. The
+  // one-page tolerance above exists for resume prompts; for uploads it dropped
+  // every single-page advance. Within that tolerance, upload only when the
+  // local page is strictly later and the local percentage is higher too, so a
+  // position the server has a little further is still never overwritten.
+  static bool shouldUpload(const MappedProgressPositionOrder order, const int localPage, const int remotePage,
+                           const float localPercentage, const float remotePercentage) {
+    if (order == MappedProgressPositionOrder::LOCAL_AHEAD) return true;
+    if (order != MappedProgressPositionOrder::SAME_PAGE) return false;
+    return localPage > remotePage && localPercentage - remotePercentage > SAME_PAGE_PERCENT_EPSILON;
+  }
+
+  static constexpr float SAME_PAGE_PERCENT_EPSILON = 0.00001f;
 };

@@ -623,7 +623,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // Every station join is a window where plugin senders are deliverable, so
     // drain the plugin outboxes here (web server up and sleep entry are the
     // other such moments). Cheap no-op when nothing is queued.
-    pluginevents::drain(&renderer);
+    // Fork: an automatic KOSync upload drains after its requests instead, so
+    // receivers that check the sync server never run ahead of the upload.
+    if (!backgroundAutoConnect()) {
+      pluginevents::drain(&renderer);
+    }
 
     // If we entered a new password, ask if user wants to save it
     // Otherwise, immediately complete so parent can start web server

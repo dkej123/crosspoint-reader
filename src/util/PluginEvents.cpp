@@ -21,8 +21,8 @@
 
 namespace {
 
-constexpr const char* EVENT_NAMES[] = {"reader.open", "reader.exit", "reader.session", "book.downloaded",
-                                       "sleep.enter"};
+constexpr const char* EVENT_NAMES[] = {"reader.open",     "reader.exit", "reader.session",
+                                       "book.downloaded", "sleep.enter", "kosync.result"};
 static_assert(sizeof(EVENT_NAMES) / sizeof(EVENT_NAMES[0]) == static_cast<size_t>(pluginevents::Event::COUNT),
               "event name table out of sync");
 

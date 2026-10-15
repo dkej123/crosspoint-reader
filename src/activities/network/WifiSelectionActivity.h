@@ -41,6 +41,8 @@ enum class WifiSelectionState {
 enum class WifiAutoConnectMode : uint8_t {
   INTERACTIVE,
   HEADLESS_QUICK,
+  // Plugin events are not drained on connect: the only caller (automatic
+  // KOSync upload) delivers them after the upload.
   HEADLESS_BACKGROUND,
 };
 

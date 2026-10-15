@@ -29,3 +29,27 @@ TEST(MappedProgressPositionPolicy, RejectsInvalidPositions) {
   EXPECT_EQ(MappedProgressPositionPolicy::compare(0, 0, -1, 0), MappedProgressPositionOrder::INVALID);
   EXPECT_EQ(MappedProgressPositionPolicy::compare(0, 0, 0, -1), MappedProgressPositionOrder::INVALID);
 }
+
+// Fork requirement: one page read forward on the reader must reach the server,
+// but a server record that is even slightly further must never be overwritten.
+TEST(MappedProgressPositionPolicy, UploadsSinglePageAdvance) {
+  const auto order = MappedProgressPositionPolicy::compare(10, 42, 10, 41);
+  EXPECT_TRUE(MappedProgressPositionPolicy::shouldUpload(order, 42, 41, 0.3412f, 0.3398f));
+}
+
+TEST(MappedProgressPositionPolicy, NeverUploadsOverSlightlyFurtherServerRecord) {
+  // Mapping rounds the server position one page back, but its percentage is higher.
+  EXPECT_FALSE(
+      MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::SAME_PAGE, 42, 41, 0.3412f, 0.3415f));
+  EXPECT_FALSE(
+      MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::SAME_PAGE, 41, 41, 0.3412f, 0.3398f));
+  EXPECT_FALSE(
+      MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::SAME_PAGE, 41, 42, 0.3412f, 0.3398f));
+  EXPECT_FALSE(
+      MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::REMOTE_AHEAD, 50, 52, 0.5f, 0.4f));
+  EXPECT_FALSE(MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::INVALID, 50, 2, 0.5f, 0.1f));
+}
+
+TEST(MappedProgressPositionPolicy, UploadsWhenClearlyAhead) {
+  EXPECT_TRUE(MappedProgressPositionPolicy::shouldUpload(MappedProgressPositionOrder::LOCAL_AHEAD, 0, 30, 0.5f, 0.45f));
+}

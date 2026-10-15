@@ -35,3 +35,14 @@ TEST(OrientationRotation, AlwaysAValidOrientation) {
     EXPECT_LT(rotateOrientation(o, LEFT), 4);
   }
 }
+
+// X4 Pro: physical Left = side Up, Right = side Down. Inverted and Landscape
+// CCW swap the nav because the physical right button is on the reader's left.
+// The button on the reader's right rotates clockwise in every orientation.
+TEST(OrientationRotation, ReadersRightIsClockwiseInEveryOrientation) {
+  constexpr bool PHYSICAL_RIGHT = true, PHYSICAL_LEFT = false;
+  EXPECT_TRUE(rotationClockwise(PHYSICAL_RIGHT, /*navSwapped=*/false));  // Portrait, Landscape CW
+  EXPECT_FALSE(rotationClockwise(PHYSICAL_LEFT, /*navSwapped=*/false));
+  EXPECT_TRUE(rotationClockwise(PHYSICAL_LEFT, /*navSwapped=*/true));  // Inverted, Landscape CCW
+  EXPECT_FALSE(rotationClockwise(PHYSICAL_RIGHT, /*navSwapped=*/true));
+}

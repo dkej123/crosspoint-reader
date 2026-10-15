@@ -312,9 +312,9 @@ void PluginCatalogActivity::enterPluginPicker() {
   // Disclose which device events each plugin receives (and so what reading
   // activity it can send off the device). The list leads the subtitle so the
   // two-line wrap never cuts it.
-  static constexpr StrId EVENT_LABELS[] = {StrId::STR_EVENT_BOOK_OPEN, StrId::STR_EVENT_BOOK_CLOSE,
+  static constexpr StrId EVENT_LABELS[] = {StrId::STR_EVENT_BOOK_OPEN,       StrId::STR_EVENT_BOOK_CLOSE,
                                            StrId::STR_EVENT_READING_SESSION, StrId::STR_EVENT_DOWNLOAD,
-                                           StrId::STR_EVENT_SLEEP};
+                                           StrId::STR_EVENT_SLEEP,           StrId::STR_EVENT_KOSYNC_RESULT};
   static_assert(sizeof(EVENT_LABELS) / sizeof(EVENT_LABELS[0]) == static_cast<size_t>(pluginevents::Event::COUNT));
   for (auto& plugin : installedPlugins) {
     const uint8_t mask = pluginevents::subscriptionMask(plugin.name.c_str());

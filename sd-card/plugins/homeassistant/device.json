@@ -12,6 +12,15 @@
         "body": "{\"event\":\"reader.session\",\"id\":\"{event.id|json}\",\"ts\":{event.ts},\"book\":\"{event.book|json}\",\"document\":\"{event.document|json}\",\"start_time\":{event.start_time},\"end_time\":{event.end_time},\"duration_seconds\":{event.duration_seconds},\"start_progress_bp\":{event.start_progress_bp},\"end_progress_bp\":{event.end_progress_bp}}"
       }
     },
+    "kosync.result": {
+      "connect": false,
+      "request": {
+        "method": "POST",
+        "url": "{cfg.ha_url}/api/webhook/{cfg.webhook_id}",
+        "headers": { "Content-Type": "application/json" },
+        "body": "{\"event\":\"kosync.result\",\"id\":\"{event.id|json}\",\"ts\":{event.ts},\"book\":\"{event.book|json}\",\"document\":\"{event.document|json}\",\"result\":\"{event.result|json}\",\"percent\":\"{event.percent|json}\",\"remote_percent\":\"{event.remote_percent|json}\"}"
+      }
+    },
     "sleep.enter": {
       "request": {
         "method": "POST",

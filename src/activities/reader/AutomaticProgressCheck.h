@@ -63,8 +63,17 @@ class AutomaticProgressCheck {
   /** Stop caring about a running check; it winds down on its own. */
   void abandon();
 
+  /**
+   * Fork: waits (bounded) until no check task is alive. An abandoned task can
+   * still be inside WiFi.begin() or a request, and it releases the radio after
+   * its fetch; a sleep-time upload must not share the radio with it.
+   * Returns false on timeout.
+   */
+  static bool waitUntilNoTaskRunning(uint32_t timeoutMs);
+
  private:
   static void taskTrampoline(void* arg);
+  static std::atomic<uint8_t> liveTasks_;
 
   std::shared_ptr<AutomaticProgressCheckJob> job_;
 };

@@ -136,8 +136,52 @@ Znalezione na sprzęcie z logiem debug (`env:x4pro-dkej-debug`, `LOG_LEVEL=2`):
 - **Wysyłka do HA po nieudanym Wi-Fi nie startowała** (`sta is connecting,
   cannot set config`) — przed joinem zdarzeń przy uśpieniu `WiFi.disconnect`.
 
+### 1b. Przegląd automatycznego sync (14.10.2026, wieczór)
+
+Objaw: zdarzenie dociera do HA, a do kosync nie. Przyczyny znalezione w kodzie:
+
+- **HA dostawał zdarzenia, zanim czytnik w ogóle zapytał kosync.**
+  `WifiSelectionActivity` po połączeniu od razu opróżniał kolejkę wtyczek, więc
+  webhook szedł przed GET/GET/PUT do kosync. Automatyzacja HA sprawdzała kosync
+  po 20 s, a wysyłka z ponowieniami (próby po 5 s, mapowanie rozdziału) mogła
+  trwać dłużej → „⚠️ nie dotarło”, choć pozycja docierała chwilę później.
+  Teraz przy automatycznej wysyłce kolejka jest opróżniana **po** kosync, na tym
+  samym połączeniu (`finishAutomaticPush`; przy uśpieniu robi to
+  `drainSleepPluginEvents`, zanim radio zostanie wyłączone).
+- **Czytnik sam mówi HA, co zrobił:** nowe zdarzenie `kosync.result`
+  (`uploaded` / `in_sync` / `remote_ahead` / `no_wifi` / `failed` / `error`,
+  plus `percent` i `remote_percent`; wyjście bez przewrócenia strony nie
+  wysyła nic i nie tworzy zdarzenia). HA nie musi zgadywać
+  z odpytywania kosync ani porównywać procentów liczonych innym wzorem (sesja:
+  strona/liczba stron, kosync: strona/(liczba stron−1) — różnica do kilku
+  dziesiątych punktu przy końcu rozdziału, więcej niż tolerancja 0,15).
+- **Przesunięcie o jedną stronę nigdy nie było wysyłane.** Tolerancja ±1
+  strony (z PR #2760, dla podpowiedzi przy wznawianiu) obejmowała też wysyłkę.
+  Teraz przy wysyłce ta sama strona ±1 → wyślij, gdy lokalna strona jest
+  dalej **i** procent jest wyższy (`MappedProgressPositionPolicy::shouldUpload`);
+  dalsza pozycja na serwerze dalej nie jest nadpisywana.
+- **Ponowienia nie łączyły Wi-Fi na nowo.** Gdy asocjacja padła (−76 dBm),
+  wszystkie próby kończyły się błędem sieci do końca budżetu. Teraz między
+  próbami `WiFi.reconnect()` (max 10 s, w budżecie 120 s).
+- **Nieudana wysyłka przepadała.** Teraz przy `failed` (błąd sieci/serwera
+  po połączeniu z Wi-Fi) zostaje znacznik `/.crosspoint/kosync_pending.txt`;
+  następne wyjście/uśpienie **z tą samą książką** wysyła ponownie nawet bez
+  przewrócenia strony. Znacznik ma jedno miejsce (porażka w innej książce go
+  zastępuje), a wynik innej książki go nie kasuje. `no_wifi` nie zostawia
+  znacznika, żeby poza zasięgiem znanych sieci każde uśpienie nie włączało
+  radia na ~2 min.
+- **Zmiany w HA** (nowy sensor `sensor.xteink_kosync` i automatyzacja push
+  zamiast odpytywania kosync): `sd-card/plugins/homeassistant/HA_KOSYNC_RESULT.md`.
+- **Wyścig z porzuconym sprawdzaniem w tle** (pull po wybudzeniu): zadanie
+  mogło być w trakcie `WiFi.begin()` lub zapytania (do 15 s, bez przerwania) i
+  zajmować radio oraz pamięć TLS w trakcie wysyłki. Zapytanie jest teraz
+  przerywane po porzuceniu, a wysyłka czeka (max 5 s), aż zadanie się skończy.
+- **Pozycja z serwera, której nie da się zmapować na książkę**, była
+  raportowana jako zgodna; teraz `error`.
+
 Zachowanie, które jest celowe (nie błąd):
-- różnica ±1 strony = ta sama pozycja → bez wysyłki do kosync,
+- ta sama strona albo serwer dalej → bez wysyłki do kosync (`in_sync` /
+  `remote_ahead` w `kosync.result`),
 - strona liczy się do sesji po ≥ 2 s, sesja ≥ 10 s; szybkie kartkowanie albo
   cofanie nie tworzy sesji, więc nie ma pusha,
 - tryb „Ask” przy wyjściu z książki pyta, gdy serwer jest dalej.
@@ -226,6 +270,10 @@ nie commitować).
 **`configuration.yaml` → `utility_meter:`** — `xteink_czytanie_dzien /
 _tydzien / _miesiac` na `sensor.xteink_czas_laczny` (wymaga restartu HA).
 
+**`sensor.xteink_kosync`** (od 15.10.2026, osobny blok `template:` z tym samym
+webhookiem, tylko `kosync.result`) — wynik automatycznej wysyłki do kosync;
+instrukcja: `sd-card/plugins/homeassistant/HA_KOSYNC_RESULT.md`.
+
 **Integracja HTTP Requests (`dkej123/ha-http-requests` ≥ 0.8.0)** — zapytanie
 „kosync progress” (sekcja Xteink, entry `01M4XJ9P7Y8GZPQ6XM1MRB6VJ0`): GET
 `https://kosync.haosdk.pl/syncs/progress/{{ document }}`, nagłówki `Accept`,
@@ -235,7 +283,9 @@ YAML). Automatyzacja wywołuje je przez `http_requests.execute` z
 14.10, razem z `kosync_user`/`kosync_key` w `secrets.yaml`).
 
 **`automations.yaml`**
-- „Xteink – potwierdzenie synchronizacji (push na Pixel)” — po nowej,
+- „Xteink – potwierdzenie synchronizacji (push na Pixel)” — **do zastąpienia**
+  automatyzacją `xteink_kosync_potwierdzenie` wyzwalaną przez
+  `sensor.xteink_kosync` (`HA_KOSYNC_RESULT.md`). Dotychczasowa wersja: po nowej,
   najnowszej sesji czeka 20 s (czytnik wysyła webhook zaraz po połączeniu z
   Wi-Fi, a pozycję do kosync chwilę później), odczytuje pozycję z kosync
   akcją `http_requests.execute` (integracja HTTP Requests, zapytanie
@@ -272,6 +322,21 @@ Kopie konfiguracji HA: `configuration.yaml.pre-xteink-20261013`,
 `automations.yaml.pre-http-requests-kosync-20261014`,
 `automations.yaml.pre-xteink-opoznienie-20261014`,
 `automations.yaml.pre-xteink-tolerancja-20261014`.
+
+### 3b. Obracanie przytrzymaniem przycisku (poprawka 14.10.2026)
+
+Na X4 Pro (ekran dotykowy) przyciski stron podążają za orientacją: w
+**Odwróconej** i **Poziomej CCW** fizyczny prawy przycisk to „poprzednia
+strona”. Skutki przed poprawką: kierunek obrotu zależał od bieżącej orientacji,
+a przy przejściu do/z tych orientacji ten sam przytrzymany przycisk zmieniał
+znaczenie i obracał drugi raz (w trakcie trzymania i przy puszczeniu) — ekran
+wracał do poprzedniej orientacji albo „skakał”. Teraz po obrocie przyciski
+stron są ignorowane do ich puszczenia, a kierunek liczony jest z fizycznie
+przytrzymanego przycisku i orientacji (`rotationClockwise`): **przycisk po
+prawej stronie czytającego obraca w prawo** (zgodnie z ruchem wskazówek), po
+lewej — w lewo, w każdej orientacji i niezależnie od ustawienia układu
+bocznych przycisków. W Odwróconej fizyczny prawy przycisk jest po lewej, więc
+obraca w lewo. Dotyk i pilot obracają wg kierunku strony.
 
 ### 4. Pilot BLE do kartkowania
 

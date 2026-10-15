@@ -42,6 +42,7 @@ class EpubReaderActivity final : public ReaderActivity {
   bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
   bool automaticProgressCheckPending = false;
+  bool waitForPageButtonsUp = false;  // after a long-press rotation (fork)
   AutomaticProgressCheck automaticCheck_;
   // Consecutive page-load failures. Each failure drops the section and rebuilds on the next render,
   // which recovers a transiently corrupt cache; capped so a persistently bad page can't spin forever.

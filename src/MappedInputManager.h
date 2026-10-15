@@ -57,6 +57,13 @@ class MappedInputManager {
   // One-shot threshold event while the button is down; consumes its release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
   bool consumeSuppressedRelease() const;
+  // Drops long-press latches and pending release suppression. For callers that
+  // change the live orientation mid-hold: both are keyed by logical button, and
+  // the remap would leave them on the wrong physical button.
+  void clearLongPressState() const {
+    longPressFiredButtons = 0;
+    suppressedReleaseButtons = 0;
+  }
   bool isPressed(Button button) const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;

@@ -37,6 +37,7 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
+#include "KosyncPending.h"
 #include "MappedInputManager.h"
 #include "MappedProgressPositionPolicy.h"
 #include "OrientationRotation.h"
@@ -916,6 +917,26 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Fork: after a long-press rotation the same physical button can map to the
+  // other logical page button (nav swaps in Inverted / Landscape CCW), so it
+  // would fire again while held and on release. Ignore page buttons until
+  // they are all up.
+  if (waitForPageButtonsUp) {
+    const bool anyHeld = mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+                         mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+                         mappedInput.isPressed(MappedInputManager::Button::Left) ||
+                         mappedInput.isPressed(MappedInputManager::Button::Right);
+    if (anyHeld) return;
+    waitForPageButtonsUp = false;
+    mappedInput.clearLongPressState();
+    if (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+        mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      return;
+    }
+  }
+
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
@@ -943,11 +964,21 @@ void EpubReaderActivity::loop() {
   }
 
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    // Right (next) holds rotate clockwise, left (previous) counter-clockwise.
-    const uint8_t newOrientation =
-        rotateOrientation(SETTINGS.orientation, /*clockwise=*/nextTriggered, SETTINGS.ORIENTATION_COUNT);
+    // The button on the reader's right rotates clockwise, read from the held
+    // physical button so the side-button layout setting cannot flip it. Touch
+    // zones and the remote have no position; they keep the page direction.
+    const bool fromTouch = touch.prev || touch.next;
+    const bool rightHeld = mappedInput.isPressed(MappedInputManager::Button::Down) ||
+                           mappedInput.isPressed(MappedInputManager::Button::Right);
+    const bool leftHeld = mappedInput.isPressed(MappedInputManager::Button::Up) ||
+                          mappedInput.isPressed(MappedInputManager::Button::Left);
+    const bool clockwise = (fromTouch || rightHeld == leftHeld)
+                               ? nextTriggered
+                               : rotationClockwise(rightHeld, mappedInput.isNavDirectionSwapped());
+    const uint8_t newOrientation = rotateOrientation(SETTINGS.orientation, clockwise, SETTINGS.ORIENTATION_COUNT);
     applyOrientation(newOrientation);
-    if (touch.prev || touch.next) haptic_feedback::touchAction(true);
+    if (!fromTouch) waitForPageButtonsUp = true;
+    if (fromTouch) haptic_feedback::touchAction(true);
     requestUpdate();
     return;
   }
@@ -1267,8 +1298,13 @@ bool EpubReaderActivity::launchKOReaderSync(const KOReaderSyncActivity::Mode mod
   if (mode == KOReaderSyncActivity::Mode::AUTO_PUSH &&
       (!sessionStartPositionCaptured ||
        (localPos.spineIndex == sessionStartSpineIndex && localPos.pageNumber == sessionStartPage))) {
-    LOG_DBG("KOSync", "Automatic upload skipped: reading position did not change");
-    return false;
+    // Fork: a failed earlier upload of this book is retried even without a page turn.
+    if (kosyncpending::isPendingFor(epub->getPath())) {
+      LOG_DBG("KOSync", "Position unchanged, but the last automatic upload failed; retrying");
+    } else {
+      LOG_DBG("KOSync", "Automatic upload skipped: reading position did not change");
+      return false;
+    }
   }
 
   SavedProgressPosition localKoPos;

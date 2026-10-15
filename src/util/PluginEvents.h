@@ -49,6 +49,7 @@ enum class Event : uint8_t {
   ReaderSession,   // "reader.session"   vars: book, document, active-session summary
   BookDownloaded,  // "book.downloaded"  vars: path, title, plugin
   SleepEnter,      // "sleep.enter"      vars: book, percent when sleeping from a reader, else none
+  KosyncResult,    // "kosync.result"    vars: book, document, result, percent, remote_percent (fork)
   COUNT
 };
 

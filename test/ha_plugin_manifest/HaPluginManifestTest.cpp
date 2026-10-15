@@ -140,3 +140,22 @@ TEST_F(HaPluginManifest, SleepBodyIsValidJsonOutsideABook) {
   // unfilled variables stay literal and must not break the JSON.
   parseBody(render(body("sleep.enter"), {}));
 }
+
+// Fork: the automatic KOSync outcome reaches HA. It never brings WiFi up on its
+// own (a "no_wifi" result must not start another join); it rides the upload or
+// session connection.
+TEST_F(HaPluginManifest, KosyncResultIsDeliveredAndValidJson) {
+  EXPECT_FALSE(manifest["events"]["kosync.result"]["connect"].as<bool>());
+  for (const char* book : kAwkwardBooks) {
+    JsonDocument doc = parseBody(render(body("kosync.result"), {{"book", book},
+                                                                {"document", "0123456789abcdef0123456789abcdef"},
+                                                                {"result", "uploaded"},
+                                                                {"percent", "34.12"},
+                                                                {"remote_percent", ""}}));
+    EXPECT_EQ(doc["event"].as<std::string>(), "kosync.result");
+    EXPECT_EQ(doc["book"].as<std::string>(), book);
+    EXPECT_EQ(doc["result"].as<std::string>(), "uploaded");
+    EXPECT_EQ(doc["percent"].as<std::string>(), "34.12");
+    EXPECT_EQ(doc["remote_percent"].as<std::string>(), "");
+  }
+}

@@ -60,6 +60,7 @@ bool connectHeadless(const std::atomic<bool>& abandoned) {
 }
 
 struct DeviceSteps {
+  const std::atomic<bool>& abandoned;
   bool connect(const std::atomic<bool>& abandoned) {
     // Load saved WiFi credentials from SD before the headless connect attempt.
     // (WifiSelectionActivity does this in onEnter(); a background check runs
@@ -77,7 +78,9 @@ struct DeviceSteps {
     return hash;
   }
   KOReaderSyncClient::Error fetch(const std::string& hash, KOReaderProgress& out) {
-    const auto result = KOReaderSyncClient::getProgress(hash, out);
+    // Abandoned (reader left / sleep) ends the request within one poll.
+    const auto result = KOReaderSyncClient::getProgress(hash, out, KOReaderSyncClient::DEFAULT_REQUEST_TIMEOUT_MS,
+                                                        [this]() { return abandoned.load(std::memory_order_acquire); });
     if (result != KOReaderSyncClient::OK && result != KOReaderSyncClient::NOT_FOUND) {
       LOG_DBG("KOSync", "Automatic check: getProgress failed (%d)", static_cast<int>(result));
     }
@@ -88,6 +91,20 @@ struct DeviceSteps {
 };
 
 }  // namespace
+
+std::atomic<uint8_t> AutomaticProgressCheck::liveTasks_{0};
+
+bool AutomaticProgressCheck::waitUntilNoTaskRunning(const uint32_t timeoutMs) {
+  const uint32_t startedAt = millis();
+  while (liveTasks_.load(std::memory_order_acquire) != 0) {
+    if (millis() - startedAt >= timeoutMs) {
+      LOG_ERR("KOSync", "Automatic check task still running after %lu ms", static_cast<unsigned long>(timeoutMs));
+      return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  return true;
+}
 
 void AutomaticProgressCheck::abandon() {
   if (job_) job_->abandoned.store(true, std::memory_order_release);
@@ -128,8 +145,10 @@ bool AutomaticProgressCheck::start(const std::string& epubPath) {
   auto* taskRef = new (std::nothrow) std::shared_ptr<AutomaticProgressCheckJob>(job);
   if (!taskRef) return false;
 
+  liveTasks_.fetch_add(1, std::memory_order_acq_rel);
   if (xTaskCreatePinnedToCore(&taskTrampoline, "AutoProgressCheck", 8192, taskRef, 1, nullptr, 0) != pdPASS) {
     LOG_ERR("KOSync", "Failed to create automatic progress check task");
+    liveTasks_.fetch_sub(1, std::memory_order_acq_rel);
     delete taskRef;
     return false;
   }
@@ -140,9 +159,10 @@ bool AutomaticProgressCheck::start(const std::string& epubPath) {
 void AutomaticProgressCheck::taskTrampoline(void* arg) {
   auto* ref = static_cast<std::shared_ptr<AutomaticProgressCheckJob>*>(arg);
   {
-    DeviceSteps steps;
+    DeviceSteps steps{(*ref)->abandoned};
     runAutomaticProgressCheck(**ref, steps);
   }
-  delete ref;            // may free the job if the reader already let go
+  delete ref;  // may free the job if the reader already let go
+  liveTasks_.fetch_sub(1, std::memory_order_acq_rel);
   vTaskDelete(nullptr);  // never touches the job after this point
 }

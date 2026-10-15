@@ -119,6 +119,12 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void ensureEpubLoaded();
   void saveProgressAndReturn(int spineIndex, int page);
   void completeFlow();
+  // Fork: single exit for every automatic upload. Records the outcome
+  // (kosync.result event, retry marker), delivers queued plugin events on the
+  // live connection, then drops WiFi and completes the flow.
+  void finishAutomaticPush(const char* result, bool retryLater, float remotePercentage = -1.0f);
+  // Fork: rejoins the network between retries when the association dropped.
+  void rejoinWifiIfDropped();
 
   // The UiAppHost app hosts the interactive states (SHOWING_RESULT compare
   // rows and the NO_REMOTE_PROGRESS upload prompt) so they get themed
