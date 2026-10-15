@@ -75,7 +75,9 @@ class ActivityManager {
   ~ActivityManager() { assert(false); /* should never be called */ };
 
   void begin();
-  void loop();
+  // navigationGestures false: the home and light-panel gestures are ignored, so
+  // a deferred sleep's sync flow cannot be navigated away from (and orphaned).
+  void loop(bool navigationGestures = true);
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);

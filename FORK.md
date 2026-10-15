@@ -135,6 +135,17 @@ Znalezione na sprzęcie z logiem debug (`env:x4pro-dkej-debug`, `LOG_LEVEL=2`):
   poza zasięgiem znanych sieci uśpienie trwa ~2 min z włączonym radiem.
 - **Wysyłka do HA po nieudanym Wi-Fi nie startowała** (`sta is connecting,
   cannot set config`) — przed joinem zdarzeń przy uśpieniu `WiFi.disconnect`.
+- **Bez Wi-Fi czytnik „wisiał” przy usypianiu, potem nie dało się go uśpić**
+  (15.10). Przez te do 100 s okładka była, a światło się świeciło; klawisz
+  Home albo gest panelu światła w tym czasie porzucał synchronizację, flaga
+  odroczonego uśpienia zostawała ustawiona i każde kolejne uśpienie było
+  ignorowane aż do restartu. Teraz (`src/main.cpp`, `ActivityManager::loop`):
+  światło gaśnie razem z okładką; gesty nawigacji są w tym czasie ignorowane;
+  przycisk zasilania od razu budzi czytnik i wraca do książki (szukanie Wi-Fi
+  i ponawianie wysyłki są przerywane, także w blokujących pętlach ponowień;
+  wysyłka zostaje oznaczona do ponowienia przy następnym wyjściu/uśpieniu,
+  zdarzenia do HA czekają w kolejce); po ~150 s czytnik zasypia mimo wszystko.
+  Testy na sprzęcie: do zrobienia.
 
 ### 1b. Przegląd automatycznego sync (14.10.2026, wieczór)
 
@@ -227,7 +238,8 @@ Zdarzenia:
 - `sleep.enter` — książka i procent.
 
 Przy uśpieniu kolejność jest: wysłanie pozycji do kosync → zdarzenia do HA →
-sen. Wi-Fi tylko gdy bateria ≥ 20%, join max 10 s; nieudane zdarzenia czekają w
+sen. Wi-Fi dla zdarzeń tylko gdy bateria ≥ 20%, ich osobny join max 10 s
+(Wi-Fi dla kosync: do 100 s, §1a); nieudane zdarzenia czekają w
 kolejce na SD (dostarczanie „co najmniej raz”).
 
 Wartości tekstowe w treści żądań używają filtra `{event.NAME|json}` (dodatek

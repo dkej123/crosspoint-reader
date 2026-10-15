@@ -170,7 +170,7 @@ void KOReaderSyncActivity::rejoinWifiIfDropped() {
   LOG_DBG("KOSync", "WiFi dropped during automatic upload; rejoining (up to %lu ms)", (unsigned long)budget);
   WiFi.reconnect();
   const uint32_t startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < budget) {
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < budget && !automaticOperationDeadlineExpired()) {
     delay(100);
   }
   LOG_DBG("KOSync", "WiFi rejoin %s", WiFi.status() == WL_CONNECTED ? "succeeded" : "failed");
@@ -192,6 +192,8 @@ void KOReaderSyncActivity::completeAlreadySynced() {
 }
 
 uint32_t KOReaderSyncActivity::automaticOperationRemainingMs() const {
+  // Fork: waking a deferred sleep ends the upload now; it is retried later.
+  if (pollDeferredSleepWake()) return 0;
   return syncretry::remainingMs(millis(), automaticOperationStartedAt);
 }
 

@@ -33,9 +33,11 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SleepFramePolicy.h"
+#include "SyncRetryPolicy.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/reader/KosyncPending.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "ble/BleRemote.h"
 #include "components/UITheme.h"
@@ -65,6 +67,9 @@ SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts(), renderer.getTtfFonts());
 static unsigned long allowSleepAt = 0;
 static unsigned long lastX4ProPowerClickAt = 0;
+// After a deferred sleep is woken, power clicks are ignored briefly so a habitual
+// double-click does not toggle the light or sleep again (0 = no guard).
+static unsigned long powerClickGuardStartedAt = 0;
 
 namespace {
 constexpr unsigned long X4PRO_POWER_DOUBLE_CLICK_MS = 500;
@@ -171,6 +176,18 @@ static bool deepSleepInProgress = false;
 static bool deferredSleepPending = false;
 static bool deferredSleepCompletionRequested = false;
 static bool deferredSleepFromTimeout = false;
+static unsigned long deferredSleepStartedAt = 0;
+// A power press during the deferred sync wakes the reader instead of sleeping.
+// The press that requested sleep must be released first (0 = not released yet).
+static unsigned long deferredSleepPowerReleasedAt = 0;
+static bool deferredSleepWakeRequested = false;
+static bool deferredSleepLightWasOn = false;
+static bool deferredSleepPrevShowBootScreen = false;
+// Past the sync's own budget (Wi-Fi join included) plus its up-to-5 s wait for
+// an abandoned background check: stop waiting rather than stay awake for good.
+constexpr unsigned long DEFERRED_SLEEP_FORCE_MS = syncretry::OPERATION_BUDGET_MS + 30000;
+// Inactivity timer for auto-sleep; reset when a deferred sleep is woken.
+static unsigned long lastActivityTime = 0;
 
 // A silent restart is internal maintenance, so the light must come back exactly
 // as the user left it. SETTINGS.frontlightOn is the saved preference and
@@ -250,6 +267,12 @@ bool handleX4ProFrontlightDoubleClick() {
     lastX4ProPowerClickAt = 0;
     return false;
   }
+
+  if (powerClickGuardStartedAt != 0 && now - powerClickGuardStartedAt < 1000) {
+    lastX4ProPowerClickAt = 0;
+    return true;
+  }
+  powerClickGuardStartedAt = 0;
 
   if (lastX4ProPowerClickAt == 0 || now - lastX4ProPowerClickAt > X4PRO_POWER_DOUBLE_CLICK_MS) {
     lastX4ProPowerClickAt = now;
@@ -415,11 +438,21 @@ void enterDeepSleep(const bool fromTimeout) {
     return;
   }
   HalPowerManager::Lock powerLock;  // Keep local preparation and sleep rendering at normal CPU frequency
+  const bool prevShowBootScreen = APP_STATE.showBootScreen;
   const bool isQuickResumeSleep = prepareSleepState(fromTimeout);
   queueSleepPluginEvents();
   if (activityManager.prepareDeferredSleep(fromTimeout)) {
     deferredSleepPending = true;
+    deferredSleepFromTimeout = fromTimeout;
+    deferredSleepStartedAt = millis();
+    deferredSleepPowerReleasedAt = 0;
+    deferredSleepWakeRequested = false;
+    deferredSleepPrevShowBootScreen = prevShowBootScreen;
+    deferredSleepLightWasOn = Frontlight.present() && Frontlight.isOn();
     activityManager.showSleepScreen(fromTimeout);
+    // The device looks asleep from here on, and the sync may take a while.
+    // Live state only: wake restores the light from SETTINGS.frontlightOn.
+    if (deferredSleepLightWasOn) Frontlight.setOn(false);
     if (isQuickResumeSleep) {
       saveSleepFrameBuffer();
     }
@@ -427,6 +460,50 @@ void enterDeepSleep(const bool fromTimeout) {
   }
   drainSleepPluginEvents(true);
   commitDeepSleep(fromTimeout, true);
+}
+
+bool pollDeferredSleepWake() {
+  if (!deferredSleepPending) return false;
+  if (deferredSleepWakeRequested) return true;
+  // Raw pin: blocking waits never run gpio.update(). The release must last
+  // 50 ms, so contact bounce of the press that requested sleep cannot wake.
+  const unsigned long now = millis();
+  if (!gpio.isPowerButtonPhysicallyPressed()) {
+    if (deferredSleepPowerReleasedAt == 0) deferredSleepPowerReleasedAt = now | 1;
+    return false;
+  }
+  if (deferredSleepPowerReleasedAt == 0 || now - deferredSleepPowerReleasedAt < 50) {
+    deferredSleepPowerReleasedAt = 0;
+    return false;
+  }
+  LOG_INF("MAIN", "Power pressed during deferred sleep; waking");
+  deferredSleepWakeRequested = true;
+  wakePowerReleasePending = true;  // the release must not act in the reader
+  lastX4ProPowerClickAt = 0;
+  powerClickGuardStartedAt = now | 1;
+  if (deferredSleepLightWasOn) Frontlight.setOn(true);
+  return true;
+}
+
+// Undoes the sleep preparation and reopens the book. The upload may have been
+// cut short, so it is retried on the next exit or sleep (pending marker).
+static void wakeFromDeferredSleep() {
+  deferredSleepPending = false;
+  deferredSleepWakeRequested = false;
+  lastActivityTime = millis();
+  const std::string bookPath = APP_STATE.openEpubPath;
+  {
+    RenderLock lock;
+    if (!bookPath.empty()) kosyncpending::mark(bookPath);
+    if (Storage.exists(SLEEP_FRAME_FILE)) Storage.remove(SLEEP_FRAME_FILE);
+    APP_STATE.showBootScreen = deferredSleepPrevShowBootScreen;
+    APP_STATE.saveToFile();
+  }
+  if (bookPath.empty()) {
+    activityManager.goHome();
+  } else {
+    activityManager.goToReader(bookPath);
+  }
 }
 
 void completeDeferredDeepSleep(const bool fromTimeout) {
@@ -725,6 +802,7 @@ void setup() {
   }
 
   allowSleepAt = millis() + 2000;
+  lastActivityTime = millis();
 }
 
 void loop() {
@@ -767,6 +845,17 @@ void loop() {
   // manager never destroys an activity while one of its methods is still active.
   if (deferredSleepCompletionRequested) {
     deferredSleepCompletionRequested = false;
+    if (!deferredSleepPending) {
+      // Already woken, but the book did not reopen (missing file, low memory)
+      // and the sync ran on; never sleep under the user, leave it for Home.
+      activityManager.goHome();
+      return;
+    }
+    if (deferredSleepWakeRequested) {
+      // Queued plugin events wait for the next Wi-Fi window; waking stays fast.
+      wakeFromDeferredSleep();
+      return;
+    }
     deferredSleepPending = false;
     // The sleep screen is already on the panel: deliver plugin events headless.
     drainSleepPluginEvents(false);
@@ -774,10 +863,30 @@ void loop() {
     return;
   }
 
-  // The sleep screen is already visible. Keep servicing only the queued sync
-  // workflow until it requests completion; ignore input and repeated timeouts.
+  // The sleep screen is already visible. Keep servicing the queued sync
+  // workflow until it requests completion. Navigation gestures and repeated
+  // sleep requests are ignored; a fresh power press wakes the reader.
   if (deferredSleepPending) {
-    activityManager.loop();
+    // Still searching for Wi-Fi: nothing was sent, so stop now. A running
+    // upload sees the wake through its deadline, ends and completes above.
+    if (pollDeferredSleepWake() && WiFi.status() != WL_CONNECTED) {
+      wakeFromDeferredSleep();
+      return;
+    }
+    if (millis() - deferredSleepStartedAt >= DEFERRED_SLEEP_FORCE_MS) {
+      LOG_ERR("MAIN", "Deferred sleep sync did not finish in %lu ms", DEFERRED_SLEEP_FORCE_MS);
+      if (deferredSleepWakeRequested) {
+        wakeFromDeferredSleep();
+      } else {
+        {
+          RenderLock lock;
+          if (!APP_STATE.openEpubPath.empty()) kosyncpending::mark(APP_STATE.openEpubPath);
+        }
+        completeDeferredDeepSleep(deferredSleepFromTimeout);
+      }
+      return;
+    }
+    activityManager.loop(/*navigationGestures=*/false);
     delay(10);
     return;
   }
@@ -813,7 +922,6 @@ void loop() {
   }
 
   // Check for any user activity (button press or release) or active background work
-  static unsigned long lastActivityTime = millis();
   if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
@@ -912,7 +1020,8 @@ void loop() {
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP &&
                                         gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
 
-  if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
+  // wakePowerReleasePending: the press that woke a deferred sleep is still held.
+  if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && !wakePowerReleasePending && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {

@@ -85,6 +85,8 @@ class HalGPIO {
   // hardware (ADC ladder off its idle rail, or the power GPIO asserted), without
   // going through the debounced state. Cheap enough to call every few ms.
   bool rawInputActive();
+  // Power contact straight from the pin, without the debounced state.
+  bool isPowerButtonPhysicallyPressed() const;
   bool hasTouch() const;
   // Capacitive Home key reported by the touch controller (X4 Pro). The tap
   // event fires on release and excludes a long hold.
