@@ -964,18 +964,15 @@ void EpubReaderActivity::loop() {
   }
 
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    // The button on the reader's right rotates clockwise, read from the held
-    // physical button so the side-button layout setting cannot flip it. Touch
-    // zones and the remote have no position; they keep the page direction.
+    // The physical right button (side Down) always turns the device to the
+    // right and the left one (side Up) to the left, whatever the orientation;
+    // see OrientationRotation.h. Touch zones and the remote have no place on
+    // the case: next page turns right, previous left.
     const bool fromTouch = touch.prev || touch.next;
-    const bool rightHeld = mappedInput.isPressed(MappedInputManager::Button::Down) ||
-                           mappedInput.isPressed(MappedInputManager::Button::Right);
-    const bool leftHeld = mappedInput.isPressed(MappedInputManager::Button::Up) ||
-                          mappedInput.isPressed(MappedInputManager::Button::Left);
-    const bool clockwise = (fromTouch || rightHeld == leftHeld)
-                               ? nextTriggered
-                               : rotationClockwise(rightHeld, mappedInput.isNavDirectionSwapped());
-    const uint8_t newOrientation = rotateOrientation(SETTINGS.orientation, clockwise, SETTINGS.ORIENTATION_COUNT);
+    const bool rightHeld = mappedInput.isPressed(MappedInputManager::Button::Down);
+    const bool leftHeld = mappedInput.isPressed(MappedInputManager::Button::Up);
+    const bool toTheRight = (fromTouch || rightHeld == leftHeld) ? nextTriggered : rightHeld;
+    const uint8_t newOrientation = turnDevice(SETTINGS.orientation, toTheRight, SETTINGS.ORIENTATION_COUNT);
     applyOrientation(newOrientation);
     if (!fromTouch) waitForPageButtonsUp = true;
     if (fromTouch) haptic_feedback::touchAction(true);

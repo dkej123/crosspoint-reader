@@ -323,20 +323,29 @@ Kopie konfiguracji HA: `configuration.yaml.pre-xteink-20261013`,
 `automations.yaml.pre-xteink-opoznienie-20261014`,
 `automations.yaml.pre-xteink-tolerancja-20261014`.
 
-### 3b. Obracanie przytrzymaniem przycisku (poprawka 14.10.2026)
+### 3b. Obracanie przytrzymaniem przycisku (poprawki 14–15.10.2026)
 
-Na X4 Pro (ekran dotykowy) przyciski stron podążają za orientacją: w
-**Odwróconej** i **Poziomej CCW** fizyczny prawy przycisk to „poprzednia
-strona”. Skutki przed poprawką: kierunek obrotu zależał od bieżącej orientacji,
-a przy przejściu do/z tych orientacji ten sam przytrzymany przycisk zmieniał
-znaczenie i obracał drugi raz (w trakcie trzymania i przy puszczeniu) — ekran
-wracał do poprzedniej orientacji albo „skakał”. Teraz po obrocie przyciski
-stron są ignorowane do ich puszczenia, a kierunek liczony jest z fizycznie
-przytrzymanego przycisku i orientacji (`rotationClockwise`): **przycisk po
-prawej stronie czytającego obraca w prawo** (zgodnie z ruchem wskazówek), po
-lewej — w lewo, w każdej orientacji i niezależnie od ustawienia układu
-bocznych przycisków. W Odwróconej fizyczny prawy przycisk jest po lewej, więc
-obraca w lewo. Dotyk i pilot obracają wg kierunku strony.
+X4 Pro ma przyciski stron na przeciwnych długich krawędziach: **3 = lewy**
+(`Side Up`, domyślnie „poprzednia strona”) i **6 = prawy** (`Side Down`,
+domyślnie „następna strona”), patrząc na czytnik trzymany pionowo.
+
+Zasada (15.10, `OrientationRotation.h` → `turnDevice`): **przytrzymanie
+prawego (6) zawsze obraca czytnik o ćwierć obrotu w prawo, lewego (3) w lewo**,
+niezależnie od bieżącej orientacji i układu bocznych przycisków. Przycisk
+nazywa się po swoim miejscu na obudowie, więc ten sam przycisk naciskany
+kolejno obraca dalej w tę samą stronę: 0° → 90° → 180° → 270° → 0°.
+Dotyk i pilot: następna strona = w prawo, poprzednia = w lewo.
+
+Uwaga do numeracji: indeksy ustawień opisują, jak rysowana jest treść
+(0 pion, 1 poziomo CW, 2 odwrócona, 3 poziomo CCW). Treść obrócona zgodnie z
+ruchem wskazówek czyta się z czytnikiem obróconym przeciwnie, więc obrót
+czytnika w prawo to indeks −1 (0 → 3 → 2 → 1).
+
+Historia: najpierw kierunek wynikał z „następna/poprzednia strona”, które
+w odwróconej i poziomej CCW zamieniają przyciski; potem (27de2c41) z przycisku
+„po prawej stronie czytającego” — w obu wersjach ten sam przycisk w kolejnych
+orientacjach obracał raz w prawo, raz w lewo (zgłoszenie 15.10: 180° → 270° →
+z powrotem 180°). Po obrocie przyciski stron są ignorowane do ich puszczenia.
 
 ### 4. Pilot BLE do kartkowania
 
