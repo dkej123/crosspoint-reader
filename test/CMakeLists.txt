@@ -119,3 +119,4 @@ add_test(NAME recursive_dictionary COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT
 
 # dkej123 fork
 add_subdirectory(orientation_rotation)
+add_subdirectory(ota_version)
