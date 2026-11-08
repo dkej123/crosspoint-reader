@@ -40,6 +40,7 @@
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
+#include "OrientationRotation.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
@@ -1018,6 +1019,26 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Fork: after a long-press rotation the same physical button can map to the
+  // other logical page button (nav swaps in Inverted / Landscape CCW), so it
+  // would fire again while held and on release. Ignore page buttons until
+  // they are all up.
+  if (waitForPageButtonsUp) {
+    const bool anyHeld = mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+                         mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+                         mappedInput.isPressed(MappedInputManager::Button::Left) ||
+                         mappedInput.isPressed(MappedInputManager::Button::Right);
+    if (anyHeld) return;
+    waitForPageButtonsUp = false;
+    mappedInput.clearLongPressState();
+    if (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+        mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      return;
+    }
+  }
+
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
@@ -1047,11 +1068,18 @@ void EpubReaderActivity::loop() {
   }
 
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    const uint8_t newOrientation =
-        nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
-                      : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
+    // The physical right button (side Down) always turns the device to the
+    // right and the left one (side Up) to the left, whatever the orientation;
+    // see OrientationRotation.h. Touch zones and the remote have no place on
+    // the case: next page turns right, previous left.
+    const bool fromTouch = touch.prev || touch.next;
+    const bool rightHeld = mappedInput.isPressed(MappedInputManager::Button::Down);
+    const bool leftHeld = mappedInput.isPressed(MappedInputManager::Button::Up);
+    const bool toTheRight = (fromTouch || rightHeld == leftHeld) ? nextTriggered : rightHeld;
+    const uint8_t newOrientation = turnDevice(SETTINGS.orientation, toTheRight, SETTINGS.ORIENTATION_COUNT);
     applyOrientation(newOrientation);
-    if (touch.prev || touch.next) haptic_feedback::touchAction(true);
+    if (!fromTouch) waitForPageButtonsUp = true;
+    if (fromTouch) haptic_feedback::touchAction(true);
     requestUpdate();
     return;
   }
