@@ -1,0 +1,52 @@
+#pragma once
+
+#include <cstdint>
+
+enum class MappedProgressPositionOrder : uint8_t {
+  INVALID,
+  LOCAL_AHEAD,
+  SAME_PAGE,
+  REMOTE_AHEAD,
+};
+
+class MappedProgressPositionPolicy {
+ public:
+  // Positions on the same spine and within one page of each other are treated
+  // as the same reading spot. The resume path can roll back by one page at a
+  // page boundary (the same physical offset restores to the previous page), so
+  // a strict page compare would flag that rollback as "remote ahead" and show
+  // a spurious prompt.
+  static MappedProgressPositionOrder compare(const int localSpineIndex, const int localPage, const int remoteSpineIndex,
+                                             const int remotePage) {
+    if (localSpineIndex < 0 || localPage < 0 || remoteSpineIndex < 0 || remotePage < 0) {
+      return MappedProgressPositionOrder::INVALID;
+    }
+    if (localSpineIndex != remoteSpineIndex) {
+      return localSpineIndex > remoteSpineIndex ? MappedProgressPositionOrder::LOCAL_AHEAD
+                                                : MappedProgressPositionOrder::REMOTE_AHEAD;
+    }
+    const int pageDelta = localPage - remotePage;
+    if (pageDelta >= -1 && pageDelta <= 1) {
+      return MappedProgressPositionOrder::SAME_PAGE;
+    }
+    return pageDelta > 0 ? MappedProgressPositionOrder::LOCAL_AHEAD : MappedProgressPositionOrder::REMOTE_AHEAD;
+  }
+
+  // Fork: whether an automatic upload should replace the server record. The
+  // one-page tolerance above exists for resume prompts; for uploads it dropped
+  // every single-page advance. Within that tolerance, upload only when the
+  // local page is strictly later and the local percentage is higher too, so a
+  // position the server has a little further is still never overwritten.
+  static bool shouldUpload(const MappedProgressPositionOrder order, const int localPage, const int remotePage,
+                           const float localPercentage, const float remotePercentage) {
+    // A finished book's record points at the start of its last chapter: a place
+    // inside that chapter is not further than 100%.
+    if (remotePercentage >= 1.0f && localPercentage < 1.0f) return false;
+    if (localPercentage >= 1.0f && remotePercentage < 1.0f) return true;
+    if (order == MappedProgressPositionOrder::LOCAL_AHEAD) return true;
+    if (order != MappedProgressPositionOrder::SAME_PAGE) return false;
+    return localPage > remotePage && localPercentage - remotePercentage > SAME_PAGE_PERCENT_EPSILON;
+  }
+
+  static constexpr float SAME_PAGE_PERCENT_EPSILON = 0.00001f;
+};

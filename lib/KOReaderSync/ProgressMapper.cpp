@@ -772,6 +772,15 @@ bool streamSpine(const std::shared_ptr<Epub>& epub, int spineIndex, ParagraphStr
 SavedProgressPosition ProgressMapper::toSavedProgress(const std::shared_ptr<Epub>& epub,
                                                       const CrossPointPosition& pos) {
   SavedProgressPosition result;
+  // The end-of-book screen sits one spine past the last chapter, where no XPath
+  // exists. Report 100% at the start of the last chapter: finding its end means
+  // inflating the whole chapter twice with nothing on screen.
+  const int spineCount = epub->getSpineItemsCount();
+  if (spineCount > 0 && pos.spineIndex >= spineCount) {
+    result.percentage = 1.0f;
+    result.xpath = "/body/DocFragment[" + std::to_string(spineCount) + "]/body";
+    return result;
+  }
   float intra =
       (pos.totalPages > 1) ? static_cast<float>(pos.pageNumber) / static_cast<float>(pos.totalPages - 1) : 0.0f;
   result.percentage = epub->calculateProgress(pos.spineIndex, intra);

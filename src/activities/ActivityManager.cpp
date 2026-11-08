@@ -102,7 +102,7 @@ void ActivityManager::renderTaskLoop() {
   }
 }
 
-void ActivityManager::loop() {
+void ActivityManager::loop(const bool navigationGestures) {
   if (mappedInput.consumeSuppressedRelease()) return;
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
@@ -116,8 +116,13 @@ void ActivityManager::loop() {
     return;
   }
 
-  if (currentActivity) {
-    if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
+  // A transition can be queued outside the current activity's loop (for
+  // example, prepareDeferredSleep() queues an automatic sync). Do not run the
+  // outgoing activity again in that state: it may observe already-released
+  // resources and queue a conflicting transition before the replacement is
+  // applied.
+  if (pendingAction == PendingAction::None && currentActivity) {
+    if (navigationGestures && !currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
       }
@@ -138,7 +143,7 @@ void ActivityManager::loop() {
       // The header back button shares this band; its taps stay Back.
       statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
     }
-    if (mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" &&
+    if (navigationGestures && mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" &&
         (statusBarTap || mappedInput.wasLightPanelGesture())) {
       haptic_feedback::touchAction();
       pushActivity(std::make_unique<FrontlightPanelActivity>(renderer, mappedInput));
@@ -324,7 +329,8 @@ void ActivityManager::goToPlugins(bool showOpds) {
   replaceActivity(std::make_unique<PluginCatalogActivity>(renderer, mappedInput, showOpds, /*rootMode=*/true));
 }
 
-void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
+void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh,
+                                 const bool allowAutomaticProgressCheck) {
   if (path.empty()) {
     goToFileBrowser("/");
     return;
@@ -340,14 +346,23 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
     return;
   }
 
-  auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  auto activity = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh,
+                                         allowAutomaticProgressCheck);
   if (activity) {
     replaceActivity(std::move(activity));
+  } else {
+    goHome();  // the caller may have nothing left to show (automatic upload)
   }
 }
 
-void ActivityManager::goToSleep(bool fromTimeout) {
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+void ActivityManager::showSleepScreen(const bool fromTimeout) {
+  RenderLock lock;
+  SleepActivity sleepScreen(renderer, mappedInput, fromTimeout);
+  sleepScreen.onEnter();
+}
+
+void ActivityManager::goToSleep(const bool fromTimeout, const bool renderScreen) {
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, renderScreen));
   if (pendingAction == PendingAction::Replace) pendingAction = PendingAction::ReplaceForSleep;
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
@@ -402,6 +417,15 @@ bool ActivityManager::preventAutoSleep() const { return currentActivity && curre
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();
+}
+
+bool ActivityManager::prepareDeferredSleep(const bool fromTimeout) {
+  if (currentActivity && currentActivity->prepareDeferredSleep(fromTimeout)) {
+    return true;
+  }
+  return std::any_of(stackActivities.rbegin(), stackActivities.rend(), [fromTimeout](const auto& activity) {
+    return activity->isReaderActivity() && activity->prepareDeferredSleep(fromTimeout);
+  });
 }
 
 bool ActivityManager::isReaderActivity() const {

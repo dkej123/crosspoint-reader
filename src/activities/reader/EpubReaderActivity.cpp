@@ -24,6 +24,7 @@
 #include <limits>
 
 #include "../../util/BookmarkFile.h"
+#include "AutomaticProgressCheckPolicy.h"
 #include "BookmarkEntry.h"
 #include "ChapterBuildGate.h"
 #include "ClipSelectionActivity.h"
@@ -39,7 +40,9 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
+#include "KosyncPending.h"
 #include "MappedInputManager.h"
+#include "MappedProgressPositionPolicy.h"
 #include "OrientationRotation.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
@@ -167,12 +170,15 @@ std::string buildReadFolderDestination(const std::string& srcPath) {
   return dstPath;
 }
 
-void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string& dstPath,
+// Relocate a finished book and its cache dir into /read/, keep it in recents by
+// repointing its entry to the new path, and repoint the resume pointer too.
+// On rename failure: LOG_ERR and leave everything in place (no UI alert subsystem here).
+bool moveFinishedBookToReadFolder(const std::string& srcPath, const std::string& dstPath,
                                   const std::string& oldCachePath) {
   LOG_INF("ERS", "Moving finished epub: %s -> %s", srcPath.c_str(), dstPath.c_str());
   if (!ClippingStore::moveBook(srcPath, dstPath)) {
     LOG_ERR("ERS", "Failed to move finished book and clippings to '/Read' folder");
-    return;
+    return false;
   }
 
   // Protected-book sidecars travel with the book; a protected book separated
@@ -190,7 +196,7 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
     if (!Storage.rename(dstPath.c_str(), srcPath.c_str())) {
       LOG_ERR("ERS", "Failed to restore epub after sidecar move failure: %s -> %s", dstPath.c_str(), srcPath.c_str());
     }
-    return;
+    return false;
   }
 
   const std::string newCachePath = "/.crosspoint/epub_" + std::to_string(std::hash<std::string>{}(dstPath));
@@ -203,10 +209,12 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, cacheMoved ? newCachePath : oldCachePath);
+  kosyncpending::rename(srcPath, dstPath);
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
     APP_STATE.saveToFile();
   }
+  return true;
 }
 
 // A button contact is closed right now. Reads the Xteink ADC ladder, power pin, and T5S3 expander
@@ -241,8 +249,8 @@ EpubReaderActivity::~EpubReaderActivity() {
     const std::string srcPath = epub->getPath();
     const std::string oldCachePath = epub->getCachePath();
     const std::string dstPath = buildReadFolderDestination(srcPath);
-    epub.reset();
-    moveFinishedBookToReadFolder(srcPath, dstPath, oldCachePath);
+    epub.reset();  // release the Epub (and any open handles) before renaming on the SD card
+    (void)moveFinishedBookToReadFolder(srcPath, dstPath, oldCachePath);
   } else {
     epub.reset();
   }
@@ -317,6 +325,14 @@ bool EpubReaderActivity::loadBook() {
   }
 
   loadLinkStack();
+  // Capture the persisted entry position before rendering begins. Input can
+  // arrive while the asynchronous first render is still completing; capturing
+  // inside render() would then mistake that first page turn for the baseline.
+  sessionStartSpineIndex = currentSpineIndex;
+  sessionStartPage = nextPageNumber;
+  sessionStartPositionCaptured = true;
+  LOG_DBG("ERS", "Session start position: spine=%d page=%d", sessionStartSpineIndex, sessionStartPage);
+
   loadCachedBookmarks();
   if (!CLIPPINGS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub")) {
     LOG_ERR("CLIP", "Failed to load clippings for %s", epub->getPath().c_str());
@@ -711,6 +727,20 @@ void EpubReaderActivity::loop() {
     applyOrientation(SETTINGS.orientation);
     requestUpdate();
     return;
+  }
+
+  // Wait until the first reader render has loaded the current section, then kick
+  // off the automatic progress check. The fetch runs in a background task so page
+  // turns keep working; pollAutomaticProgressCheck() consumes the result later.
+  // A radio start in flight would be cancelled for good, and a task from the
+  // previous book must end first: wait for both on a later pass.
+  if (automaticProgressCheckPending && initialRenderCompleted.load(std::memory_order_acquire) && section &&
+      cachedChapterTotalPageCount == 0 && !bleturner::status().starting && !AutomaticProgressCheck::anyTaskRunning()) {
+    automaticProgressCheckPending = false;
+    startAutomaticProgressCheck();
+  }
+  if (pollAutomaticProgressCheck()) {
+    return;  // the reader was replaced; epub/section are released
   }
 
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
@@ -1309,7 +1339,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
-      onGoHome();
+      leaveReader(KOReaderSyncActivity::CompletionTarget::HOME);
       return;
     }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
@@ -1381,37 +1411,75 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
   }
 }
 
-bool EpubReaderActivity::launchKOReaderSync() {
+bool EpubReaderActivity::launchKOReaderSync(const KOReaderSyncActivity::Mode mode,
+                                            const KOReaderSyncActivity::CompletionTarget completionTarget,
+                                            std::optional<KOReaderProgress> prefetchedRemoteProgress,
+                                            std::optional<CrossPointPosition> prefetchedRemotePosition) {
   flushReaderSession();
 
-  // Without a KOReader server the sync activity only brings the device online
-  // and drains that outbox; a failed join exits back to the reader with the
-  // events still queued.
+  // Without a KOReader server a manual sync only brings the device online and
+  // drains the plugin outbox; automatic flows have nothing to do.
   if (!KOREADER_STORE.hasCredentials()) {
+    if (mode != KOReaderSyncActivity::Mode::MANUAL) return false;
     activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-        renderer, mappedInput, epub->getPath(), getCurrentPosition(), SavedProgressPosition{}, "",
-        /*pluginEventsOnly=*/true));
+        renderer, mappedInput, epub->getPath(), getCurrentPosition(), SavedProgressPosition{}, "", mode,
+        completionTarget, std::nullopt, std::nullopt, /*pluginEventsOnly=*/true));
     return true;
   }
 
+  // Synchronize the complete snapshot and teardown with the render task. The
+  // first render may still be saving progress when a sleep gesture arrives.
   RenderLock renderLock;
+  if (!epub) return false;
 
   const int currentPage = section ? section->currentPage : nextPageNumber;
   const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
 
   CrossPointPosition localPos = getCurrentPosition();
+  if (mode == KOReaderSyncActivity::Mode::AUTO_PUSH &&
+      (!sessionStartPositionCaptured ||
+       (localPos.spineIndex == sessionStartSpineIndex && localPos.pageNumber == sessionStartPage))) {
+    // Fork: a failed earlier upload of this book is retried even without a page turn.
+    const bool toSleep = completionTarget == KOReaderSyncActivity::CompletionTarget::SLEEP ||
+                         completionTarget == KOReaderSyncActivity::CompletionTarget::SLEEP_TIMEOUT;
+    if (kosyncpending::isPendingFor(epub->getPath()) ||
+        (toSleep && kosyncpending::anyFinishedExcept(epub->getPath()))) {
+      LOG_DBG("KOSync", "Position unchanged, but an upload is waiting; connecting");
+    } else {
+      LOG_DBG("KOSync", "Automatic upload skipped: reading position did not change");
+      return false;
+    }
+  }
+
   SavedProgressPosition localKoPos;
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
   std::string localChapterName = (tocIdx >= 0) ? epub->getTocItem(tocIdx).title : "";
-  const std::string savedEpubPath = epub->getPath();
+  std::string savedEpubPath = epub->getPath();
 
+  // Persist current position so the reader resumes at the right page on return.
+  // goToReader() depends on this file, so abort the sync if the write fails.
   if (!saveProgress(currentSpineIndex, currentPage, totalPages)) {
     LOG_ERR("KOSync", "Aborting sync because current progress could not be saved");
+    if (mode == KOReaderSyncActivity::Mode::AUTO_PUSH) {
+      return false;
+    }
     pendingSyncSaveError = true;
     requestUpdate();
     return true;
   }
 
+  const bool moveBeforeSync = mode == KOReaderSyncActivity::Mode::AUTO_PUSH && pendingReadFolderMove;
+  std::string moveSourcePath;
+  std::string moveDestinationPath;
+  std::string moveCachePath;
+  if (moveBeforeSync) {
+    moveSourcePath = savedEpubPath;
+    moveDestinationPath = buildReadFolderDestination(moveSourcePath);
+    moveCachePath = epub->getCachePath();
+  }
+
+  releasedBookInfo = getScreenshotInfo();
+  // Release Epub and Section to free ~65KB RAM for the TLS handshake.
   LOG_DBG("KOSync", "Releasing epub for sync (heap before: %u)", (unsigned)ESP.getFreeHeap());
   {
     if (section) {
@@ -1433,16 +1501,143 @@ bool EpubReaderActivity::launchKOReaderSync() {
     if (footnoteDepth > 0) saveLinkStack();
     epub.reset();
   }
+  if (moveBeforeSync && moveFinishedBookToReadFolder(moveSourcePath, moveDestinationPath, moveCachePath)) {
+    savedEpubPath = moveDestinationPath;
+    pendingReadFolderMove = false;
+  }
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
   activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-      renderer, mappedInput, savedEpubPath, localPos, std::move(localKoPos), std::move(localChapterName)));
-  return true;
+      renderer, mappedInput, savedEpubPath, localPos, std::move(localKoPos), std::move(localChapterName), mode,
+      completionTarget, std::move(prefetchedRemoteProgress), prefetchedRemotePosition));
+  return true;  // acted: launched the sync activity
+}
+
+void EpubReaderActivity::startAutomaticProgressCheck() {
+  if (!KOREADER_STORE.getAutomaticProgressCheck()) return;
+  if (!epub) return;
+  if (automaticCheck_.isRunning() || !KOREADER_STORE.hasCredentials()) return;
+  // Nothing else runs Wi-Fi with the radio up, and a running radio is not stopped
+  // for us. It comes back when the check ends.
+  if (!bleturner::stopNow(1000)) return;
+  if (!automaticCheck_.start(epub->getPath()) && SETTINGS.ble.enabled && SETTINGS.ble.peerAddr[0] != '\0') {
+    bleturner::requestConnect();  // no task will bring the radio back for this visit
+  }
+}
+
+bool EpubReaderActivity::pollAutomaticProgressCheck() {
+  const auto status = automaticCheck_.status();
+  if (status == AutomaticProgressCheck::Status::RUNNING || status == AutomaticProgressCheck::Status::IDLE) {
+    return false;
+  }
+
+  if (status == AutomaticProgressCheck::Status::DONE_OK) {
+    const KOReaderProgress remote = automaticCheck_.remoteProgress();
+    CrossPointPosition remotePosition;
+    CrossPointPosition current;
+    {
+      // The mapping decompresses chapter data from the Epub; hold the render
+      // lock so a concurrent page render can't race the Epub/Section access.
+      RenderLock lock(*this);
+      remotePosition = mapRemoteProgress(remote);
+      current = getCurrentPosition();
+    }
+    if (!epub || current.spineIndex < 0 || current.pageNumber < 0) {
+      automaticCheck_.reset();
+      return false;
+    }
+    // The book percentage is the user's reference: a record not ahead by it must
+    // not prompt, however the page mapping rounds.
+    const float localIntra = current.totalPages > 1
+                                 ? static_cast<float>(current.pageNumber) / static_cast<float>(current.totalPages - 1)
+                                 : 0.0f;
+    const float localPercentage = epub->calculateProgress(current.spineIndex, localIntra);
+    const auto decision = AutomaticProgressCheckPolicy::decide(localPercentage, remote.percentage);
+    const auto order = MappedProgressPositionPolicy::compare(current.spineIndex, current.pageNumber,
+                                                             remotePosition.spineIndex, remotePosition.pageNumber);
+    LOG_DBG("KOSync", "Automatic check decision: local=%d/%d remote=%d/%d order=%d", current.spineIndex,
+            current.pageNumber, remotePosition.spineIndex, remotePosition.pageNumber, static_cast<int>(order));
+    if (decision == AutomaticProgressDecision::PROMPT && order == MappedProgressPositionOrder::REMOTE_AHEAD) {
+      automaticCheck_.reset();
+      // Reuse the manual sync's familiar result screen ("Progress found!") with
+      // the already-fetched remote position; skip the network round-trip.
+      launchKOReaderSync(KOReaderSyncActivity::Mode::AUTO_PULL, KOReaderSyncActivity::CompletionTarget::READER, remote,
+                         remotePosition);
+      return true;
+    }
+  } else {
+    LOG_DBG("KOSync", "Automatic check: no remote progress or error (%d)", static_cast<int>(automaticCheck_.error()));
+  }
+  automaticCheck_.reset();
+  return false;
+}
+
+CrossPointPosition EpubReaderActivity::mapRemoteProgress(const KOReaderProgress& progress) {
+  const int totalPagesInSpine = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
+  const SavedProgressPosition koPos = {progress.progress, progress.percentage};
+  CrossPointPosition mapped = ProgressMapper::toCrossPoint(epub, koPos, renderer, currentSpineIndex, totalPagesInSpine);
+  if (!mapped.hasVisibleTextOffset && progress.position.has_value()) {
+    const bool sameXPath = progress.position->xpath == progress.progress;
+    if (const auto richMapped = ProgressMapper::fromRichPosition(epub, *progress.position, renderer, sameXPath)) {
+      mapped = *richMapped;
+    }
+  }
+  return mapped;
 }
 
 void EpubReaderActivity::applyInitialOrientation() {
   ReaderActivity::applyInitialOrientation();
   appliedOrientation = SETTINGS.orientation;
+}
+
+bool EpubReaderActivity::tryAutomaticProgressUpload(const KOReaderSyncActivity::CompletionTarget completionTarget) {
+  if (!KOREADER_STORE.getAutomaticProgressUpload() || !KOREADER_STORE.hasCredentials()) {
+    return false;
+  }
+
+  return launchKOReaderSync(KOReaderSyncActivity::Mode::AUTO_PUSH, completionTarget);
+}
+
+void EpubReaderActivity::leaveReader(const KOReaderSyncActivity::CompletionTarget completionTarget) {
+  if (tryAutomaticProgressUpload(completionTarget)) {
+    return;
+  }
+
+  switch (completionTarget) {
+    case KOReaderSyncActivity::CompletionTarget::HOME:
+      onGoHome();
+      break;
+    case KOReaderSyncActivity::CompletionTarget::FILE_BROWSER:
+      activityManager.goToFileBrowser(epub ? epub->getPath() : APP_STATE.openEpubPath);
+      break;
+    default:
+      break;
+  }
+}
+
+void EpubReaderActivity::prepareForSleep() {
+  automaticCheck_.abandon();
+  ReaderActivity::prepareForSleep();
+}
+
+bool EpubReaderActivity::prepareDeferredSleep(const bool fromTimeout) {
+  return tryAutomaticProgressUpload(fromTimeout ? KOReaderSyncActivity::CompletionTarget::SLEEP_TIMEOUT
+                                                : KOReaderSyncActivity::CompletionTarget::SLEEP);
+}
+
+void EpubReaderActivity::leaveToBook(const std::string& path) {
+  // Do not make the reader wait for Wi-Fi: the next upload sends the finished book.
+  if (KOREADER_STORE.getAutomaticProgressUpload() && KOREADER_STORE.hasCredentials() && isAtEndOfBook()) {
+    // The end-of-book branch of the mapper reads no chapter and needs no framebuffer loan.
+    const SavedProgressPosition finished = ProgressMapper::toSavedProgress(epub, {currentSpineIndex, 0, 0});
+    kosyncpending::mark(epub->getPath(), finished.xpath);
+  }
+  ReaderActivity::leaveToBook(path);
+}
+
+bool EpubReaderActivity::handleHomeGesture() {
+  leaveReader(KOReaderSyncActivity::CompletionTarget::HOME);
+  return true;
 }
 
 void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
@@ -2024,6 +2219,7 @@ void EpubReaderActivity::renderBook() {
   if (showDictionaryMessage) {
     GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
   }
+  initialRenderCompleted.store(true, std::memory_order_release);
 
   // Glyphs of a damaged .cpfont draw as blanks; say why, once per loaded font.
   if (SdCardFont::takeCorruptGlyphNotice()) {
@@ -3462,6 +3658,7 @@ void EpubReaderActivity::updateBookmarkFlag() {
 }
 
 ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
+  if (!epub && releasedBookInfo) return *releasedBookInfo;  // reader.exit after a sync released the book
   ScreenshotInfo info;
   info.readerType = ScreenshotInfo::ReaderType::Epub;
   if (epub) {

@@ -60,6 +60,7 @@ add_subdirectory(koreader_xpath_resolver)
 add_subdirectory(progress_comparison)
 add_subdirectory(font_cache_manager)
 add_subdirectory(css_parser)
+add_subdirectory(automatic_progress_check)
 add_subdirectory(chapter_html_slim_parser)
 add_subdirectory(korean_line_breaking)
 add_subdirectory(em_dash_line_breaking)
@@ -118,5 +119,8 @@ add_test(NAME clipping_selection_text COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURR
 add_test(NAME recursive_dictionary COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_recursive_dictionary.py)
 
 # dkej123 fork
-add_subdirectory(orientation_rotation)
 add_subdirectory(ota_version)
+add_subdirectory(sleep_frame_policy)
+add_subdirectory(automatic_check_abandon)
+add_subdirectory(sync_retry)
+add_subdirectory(orientation_rotation)
