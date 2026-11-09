@@ -86,4 +86,5 @@ git rebase upstream/develop
 ctest --test-dir build/test && pio run -e x4pro-dkej
 ```
 
-Gdy #2760 albo #3982 wejdą do upstreamu, wystarczy usunąć odpowiedni commit.
+Gdy #3982 wejdzie do upstreamu, wystarczy usunąć commit obrotu. #2760 jest w jednym
+commicie z poprawkami niezawodności, więc po jego scaleniu ten commit trzeba dopasować.
